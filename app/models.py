@@ -2,7 +2,6 @@ from sqlalchemy import Column, Integer, String, TIMESTAMP
 from sqlalchemy.sql import func
 from app.database import Base
 
-
 class User(Base):
     __tablename__ = "users"
 
