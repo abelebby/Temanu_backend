@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from app import models, schemas
 from app.database import SessionLocal, engine
@@ -43,8 +44,54 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
 
     token = create_access_token(data={"sub": str(user.id)})
     return {"access_token": token, "token_type": "bearer"}
+    
+@app.post("/login/swagger")
+def swagger_login(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db)
+):
+    user = db.query(models.User).filter(models.User.email == form_data.username).first()
+
+    if not user or not verify_password(form_data.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    token = create_access_token(data={"sub": str(user.id)})
+    return {"access_token": token, "token_type": "bearer"}    
 
 # Example protected route — requires a valid JWT
 @app.get("/me", response_model=schemas.UserOut)
 def get_me(current_user: models.User = Depends(get_current_user)):
     return current_user
+
+# Activity APIs
+@app.post("/activity", response_model=schemas.ActivityOut)
+def create_activity(
+    activity: schemas.ActivityCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+
+    new_activity = models.Activity(
+        user_id=current_user.id, # Always use token users
+        steps=activity.steps,
+        date=activity.date
+    )
+
+    db.add(new_activity)
+    db.commit()
+    db.refresh(new_activity)
+
+    return new_activity
+
+
+@app.get("/activity", response_model=list[schemas.ActivityOut])
+def get_activity(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+
+    activities = db.query(models.Activity).filter(
+        models.Activity.user_id == current_user.id
+    ).all()
+
+    return activities

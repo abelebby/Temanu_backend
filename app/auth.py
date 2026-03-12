@@ -9,13 +9,13 @@ from app.database import SessionLocal
 import os
 from dotenv import load_dotenv
 
-load_dotenv(dotenv_path="/Users/abel/Desktop/TemanU-backend/.env")
+load_dotenv()
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login/swagger")
 
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
@@ -50,7 +50,7 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         user_id: int = payload.get("sub")
         if user_id is None:
             raise credentials_exception
-    except pyjwt.PyJWTError:
+    except pyjwt.PyJWTError as e :
         print("JWT ERROR:", str(e))
         raise credentials_exception
 

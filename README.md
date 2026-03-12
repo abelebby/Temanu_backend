@@ -47,6 +47,8 @@ pip install -r requirements.txt
 ```bash
 cp .env.example .env
 ```
+Fill in the values — get the `DATABASE_URL` and `SECRET_KEY` from Abel privately.
+
 Generate your own secret key:
 ```bash
 openssl rand -hex 32
