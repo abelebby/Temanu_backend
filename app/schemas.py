@@ -36,3 +36,13 @@ class ActivityOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+#password resets~
+
+class ForgotPassword(BaseModel):
+    email: str
+
+class ResetPassword(BaseModel):
+    token: str
+    new_password: str
+
