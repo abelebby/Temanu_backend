@@ -3,11 +3,12 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from app import models, schemas
 from app.database import SessionLocal, engine
-from app.auth import hash_password, verify_password, create_access_token, get_current_user, create_reset_token, verify_reset_token
+from app.auth import hash_password, verify_password, create_access_token, get_current_user
 from fastapi_mail import FastMail, MessageSchema, ConnectionConfig
 import os
 from dotenv import load_dotenv
-
+import random
+import datetime
 
 load_dotenv(dotenv_path="/Users/abel/Desktop/TemanU-backend/.env")
 
@@ -114,38 +115,115 @@ mail_config = ConnectionConfig(
     USE_CREDENTIALS=True
 )
 
+import random
+
 @app.post("/forgot-password")
-async def forgot_password(request: schemas.ForgotPassword, db: Session = Depends(get_db)):
+async def forgot_password(request: schemas.RequestOTP, db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.email == request.email).first()
     if not user:
-        return {"message": "If that email exists, a reset link has been sent"}
-    
-    token = create_reset_token(user.email)
-    reset_link = f"http://localhost:8000/reset-password?token={token}"
+        return {"message": "If that email exists, an OTP has been sent"}
 
+    # Generate 6 digit OTP
+    code = str(random.randint(100000, 999999))
+    expires_at = datetime.datetime.utcnow() + datetime.timedelta(minutes=15)
+
+    # Delete any existing OTP for this email
+    db.query(models.OTPCode).filter(models.OTPCode.email == request.email).delete()
+
+    # Save new OTP
+    otp = models.OTPCode(email=request.email, code=code, expires_at=expires_at)
+    db.add(otp)
+    db.commit()
+
+    # Send email
     message = MessageSchema(
-        subject="TemanU Password Reset",
+        subject="TemanU Password Reset OTP",
         recipients=[user.email],
-        body=f"Hi {user.preferred_name},\n\nClick the link below to reset your password. This link expires in 15 minutes.\n\n{reset_link}\n\nIf you did not request this, ignore this email.",
+        body=f"Hi {user.preferred_name},\n\nYour password reset code is: {code}\n\nThis code expires in 15 minutes.\n\nIf you did not request this, ignore this email.",
         subtype="plain"
     )
-
     fm = FastMail(mail_config)
     await fm.send_message(message)
 
-    return {"message": "If that email exists, a reset link has been sent"}
+    return {"message": "If that email exists, an OTP has been sent"}
 
 @app.post("/reset-password")
-def reset_password(request: schemas.ResetPassword, db: Session = Depends(get_db)):
-    email = verify_reset_token(request.token)
-    if not email:
-        raise HTTPException(status_code=400, detail="Invalid or expired token")
+def reset_password(request: schemas.VerifyOTP, db: Session = Depends(get_db)):
+    otp = db.query(models.OTPCode).filter(
+        models.OTPCode.email == request.email,
+        models.OTPCode.code == request.code
+    ).first()
 
-    user = db.query(models.User).filter(models.User.email == email).first()
+    if not otp:
+        raise HTTPException(status_code=400, detail="Invalid OTP")
+
+    if otp.expires_at < datetime.datetime.utcnow():
+        db.delete(otp)
+        db.commit()
+        raise HTTPException(status_code=400, detail="OTP has expired")
+
+    user = db.query(models.User).filter(models.User.email == request.email).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
     user.password_hash = hash_password(request.new_password)
+    db.delete(otp)
     db.commit()
 
     return {"message": "Password updated successfully"}
+
+
+@app.post("/change-password/request-otp")
+async def request_change_password_otp(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # Generate OTP
+    code = str(random.randint(100000, 999999))
+    expires_at = datetime.datetime.utcnow() + datetime.timedelta(minutes=15)
+
+    # Delete any existing OTP for this user
+    db.query(models.OTPCode).filter(models.OTPCode.email == current_user.email).delete()
+
+    # Save new OTP
+    otp = models.OTPCode(email=current_user.email, code=code, expires_at=expires_at)
+    db.add(otp)
+    db.commit()
+
+    # Send email
+    message = MessageSchema(
+        subject="TemanU Password Change OTP",
+        recipients=[current_user.email],
+        body=f"Hi {current_user.preferred_name},\n\nYour password change code is: {code}\n\nThis code expires in 15 minutes.\n\nIf you did not request this, please secure your account immediately.",
+        subtype="plain"
+    )
+    fm = FastMail(mail_config)
+    await fm.send_message(message)
+
+    return {"message": "OTP sent to your registered email"}
+
+
+@app.post("/change-password/verify")
+def verify_change_password(
+    request: schemas.VerifyChangePassword,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    otp = db.query(models.OTPCode).filter(
+        models.OTPCode.email == current_user.email,
+        models.OTPCode.code == request.code
+    ).first()
+
+    if not otp:
+        raise HTTPException(status_code=400, detail="Invalid OTP")
+
+    if otp.expires_at < datetime.datetime.utcnow():
+        db.delete(otp)
+        db.commit()
+        raise HTTPException(status_code=400, detail="OTP has expired")
+
+    current_user.password_hash = hash_password(request.new_password)
+    db.delete(otp)
+    db.commit()
+
+    return {"message": "Password changed successfully"}

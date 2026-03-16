@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, TIMESTAMP,ForeignKey, Date
+from sqlalchemy import Column, Integer, String, TIMESTAMP,ForeignKey, Date, DateTime
+import datetime
 from sqlalchemy.sql import func
 from app.database import Base
 
@@ -20,3 +21,11 @@ class Activity(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     steps = Column(Integer, nullable=False)
     date = Column(Date, nullable=False)
+
+class OTPCode(Base):
+    __tablename__ = "otp_codes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String(100), nullable=False)
+    code = Column(String(6), nullable=False)
+    expires_at = Column(DateTime, nullable=False)

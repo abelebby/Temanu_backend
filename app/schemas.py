@@ -39,10 +39,19 @@ class ActivityOut(BaseModel):
 
 #password resets~
 
-class ForgotPassword(BaseModel):
+
+class RequestOTP(BaseModel):
     email: str
 
-class ResetPassword(BaseModel):
-    token: str
+class VerifyOTP(BaseModel):
+    email: str
+    code: str
     new_password: str
 
+
+class RequestChangePasswordOTP(BaseModel):
+    pass  # no fields needed we get email from token
+
+class VerifyChangePassword(BaseModel):
+    code: str
+    new_password: str
