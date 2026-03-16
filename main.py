@@ -38,12 +38,12 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
 
 @app.post("/login")
 def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.email == credentials.email).first()
+    user = db.query(models.User).filter(models.User.username == credentials.username).first()
     if not user or not verify_password(credentials.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-
+        raise HTTPException(status_code=401, detail="Invalid username or password")
     token = create_access_token(data={"sub": str(user.id)})
     return {"access_token": token, "token_type": "bearer"}
+
     
 @app.post("/login/swagger")
 def swagger_login(

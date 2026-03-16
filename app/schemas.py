@@ -8,8 +8,9 @@ class UserCreate(BaseModel):
     password: str  # plain password, hashed server-side
 
 class UserLogin(BaseModel):
-    email: str
+    username: str
     password: str
+
 
 class UserOut(BaseModel):
     id: int
