@@ -8,8 +8,9 @@ class UserCreate(BaseModel):
     password: str  # plain password, hashed server-side
 
 class UserLogin(BaseModel):
-    email: str
+    username: str
     password: str
+
 
 class UserOut(BaseModel):
     id: int
@@ -35,3 +36,13 @@ class ActivityOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+#password resets~
+
+class ForgotPassword(BaseModel):
+    email: str
+
+class ResetPassword(BaseModel):
+    token: str
+    new_password: str
+
