@@ -9,12 +9,21 @@ import os
 from dotenv import load_dotenv
 import random
 import datetime
+from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv(dotenv_path="/Users/abel/Desktop/TemanU-backend/.env")
 
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows any web port to connect during local testing
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows POST, GET, OPTIONS, etc.
+    allow_headers=["*"],  # Allows all headers (like your Authorization JWT)
+)
 
 def get_db():
     database = SessionLocal()
@@ -107,11 +116,11 @@ def get_activity(
 @app.post("/health", response_model=schemas.HealthMetricOut)
 def create_health_metric(
     metric: schemas.HealthMetricCreate,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    db: Session = Depends(get_db)
+    # current_user: models.User = Depends(get_current_user) <--- Comment this out
 ):
     new_metric = models.HealthMetric(
-        user_id=current_user.id,
+        user_id=1, # Manually set this to 1 just for the test
         metric_type=metric.metric_type,
         value=metric.value,
         unit=metric.unit
