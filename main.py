@@ -103,6 +103,36 @@ def get_activity(
 
     return activities
 
+# Health APIs
+@app.post("/health", response_model=schemas.HealthMetricOut)
+def create_health_metric(
+    metric: schemas.HealthMetricCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    new_metric = models.HealthMetric(
+        user_id=current_user.id,
+        metric_type=metric.metric_type,
+        value=metric.value,
+        unit=metric.unit
+    )
+
+    db.add(new_metric)
+    db.commit()
+    db.refresh(new_metric)
+
+    return new_metric
+
+@app.get("/health", response_model=list[schemas.HealthMetricOut])
+def get_health_metrics(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    metrics = db.query(models.HealthMetric).filter(
+        models.HealthMetric.user_id == current_user.id
+    ).all()
+
+    return metrics
 
 mail_config = ConnectionConfig(
     MAIL_USERNAME=os.getenv("MAIL_EMAIL"),

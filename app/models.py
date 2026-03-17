@@ -29,3 +29,13 @@ class OTPCode(Base):
     email = Column(String(100), nullable=False)
     code = Column(String(6), nullable=False)
     expires_at = Column(DateTime, nullable=False)
+
+class HealthMetric(Base):
+    __tablename__ = "health_metrics"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    metric_type = Column(String(50), nullable=False)
+    value = Column(String(50), nullable=False)
+    unit = Column(String(20), nullable=False)
+    timestamp = Column(TIMESTAMP, server_default=func.now())

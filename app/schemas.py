@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from datetime import date
+from datetime import datetime
 class UserCreate(BaseModel):
     email: str
     name: str
@@ -33,6 +34,23 @@ class ActivityOut(BaseModel):
     user_id: int
     steps: int
     date: date
+
+    class Config:
+        from_attributes = True
+
+# ===== Health Metrics Schemas =====
+class HealthMetricCreate(BaseModel):
+    metric_type: str
+    value: str
+    unit: str
+
+class HealthMetricOut(BaseModel):
+    id: int
+    user_id: int
+    metric_type: str
+    value: str
+    unit: str
+    timestamp: datetime
 
     class Config:
         from_attributes = True
