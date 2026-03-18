@@ -1,6 +1,8 @@
 from pydantic import BaseModel
 from datetime import date
 from datetime import datetime
+from typing import Optional
+
 class UserCreate(BaseModel):
     email: str
     name: str
@@ -42,20 +44,29 @@ class ActivityOut(BaseModel):
 
 # ===== Health Metrics Schemas =====
 class HealthMetricCreate(BaseModel):
-    metric_type: str
-    value: str
-    unit: str
+    blood_glucose: Optional[float] = None
+    heart_rate: Optional[int] = None
+    oxygen_saturation: Optional[float] = None
+    blood_pressure_systolic: Optional[int] = None
+    blood_pressure_diastolic: Optional[int] = None
+    calories: Optional[int] = None
+    body_weight: Optional[float] = None
 
 class HealthMetricOut(BaseModel):
     id: int
     user_id: int
-    metric_type: str
-    value: str
-    unit: str
+    blood_glucose: Optional[float]
+    heart_rate: Optional[int]
+    oxygen_saturation: Optional[float]
+    blood_pressure_systolic: Optional[int]
+    blood_pressure_diastolic: Optional[int]
+    calories: Optional[int]
+    body_weight: Optional[float]
     timestamp: datetime
 
     class Config:
         from_attributes = True
+
 
 #password resets~
 

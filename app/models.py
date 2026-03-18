@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, TIMESTAMP,ForeignKey, Date, DateTime
+from sqlalchemy import Column, Integer, String, TIMESTAMP,ForeignKey, Date, DateTime, Float
 import datetime
 from sqlalchemy.sql import func
 from app.database import Base
@@ -40,7 +40,14 @@ class HealthMetric(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    metric_type = Column(String(50), nullable=False)
-    value = Column(String(50), nullable=False)
-    unit = Column(String(20), nullable=False)
+    
+    # Specific metric columns with proper datatypes for charting
+    blood_glucose = Column(Float, nullable=True)             # e.g., mg/dL
+    heart_rate = Column(Integer, nullable=True)              # e.g., bpm
+    oxygen_saturation = Column(Float, nullable=True)         # e.g., %
+    blood_pressure_systolic = Column(Integer, nullable=True) # e.g., mmHg
+    blood_pressure_diastolic = Column(Integer, nullable=True)# e.g., mmHg
+    calories = Column(Integer, nullable=True)                # e.g., kcal
+    body_weight = Column(Float, nullable=True)               # e.g., kg
+    
     timestamp = Column(TIMESTAMP, server_default=func.now())

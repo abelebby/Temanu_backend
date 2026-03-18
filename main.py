@@ -141,9 +141,13 @@ def create_health_metric(
 ):
     new_metric = models.HealthMetric(
         user_id=current_user.id, 
-        metric_type=metric.metric_type,
-        value=metric.value,
-        unit=metric.unit
+        blood_glucose=metric.blood_glucose,
+        heart_rate=metric.heart_rate,
+        oxygen_saturation=metric.oxygen_saturation,
+        blood_pressure_systolic=metric.blood_pressure_systolic,
+        blood_pressure_diastolic=metric.blood_pressure_diastolic,
+        calories=metric.calories,
+        body_weight=metric.body_weight
     )
 
     db.add(new_metric)
@@ -157,12 +161,32 @@ def get_health_metrics(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
+    # Retrieve the user's health history ordered by the newest readings first
     metrics = db.query(models.HealthMetric).filter(
         models.HealthMetric.user_id == current_user.id
-    ).all()
+    ).order_by(models.HealthMetric.timestamp.desc()).all()
 
     return metrics
 
+# This endpoint is specifically for the Flutter app's dashboard to quickly fetch the latest health metric for charting
+@app.get("/health/latest", response_model=schemas.HealthMetricOut)
+def get_latest_health_metric(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # Query the database for the current user's health metrics
+    # Order them descending by timestamp (newest first) and grab the very first one
+    latest_metric = db.query(models.HealthMetric).filter(
+        models.HealthMetric.user_id == current_user.id
+    ).order_by(models.HealthMetric.timestamp.desc()).first()
+
+    # If the user hasn't logged any health data yet, return a 404 Not Found
+    if not latest_metric:
+        raise HTTPException(status_code=404, detail="No health data found for this user")
+
+    return latest_metric
+
+# Password Reset APIs
 mail_config = ConnectionConfig(
     MAIL_USERNAME=os.getenv("MAIL_EMAIL"),
     MAIL_PASSWORD=os.getenv("MAIL_PASSWORD"),
@@ -175,7 +199,7 @@ mail_config = ConnectionConfig(
 )
 
 import random
-
+# Endpoint to request password reset OTP
 @app.post("/forgot-password")
 async def forgot_password(request: schemas.RequestOTP, db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.email == request.email).first()
