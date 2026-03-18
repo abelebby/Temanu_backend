@@ -74,17 +74,24 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
     }
 
     
-@app.post("/login/swagger")
-def swagger_login(
-    form_data: OAuth2PasswordRequestForm = Depends(),
-    db: Session = Depends(get_db)
-):
-    user = db.query(models.User).filter(models.User.email == form_data.username).first()
-
-    if not user or not verify_password(form_data.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-
+@app.post("/login")
+def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
+    print("\n--- NEW LOGIN ATTEMPT ---")
+    print(f"Username typed: '{credentials.username}'")
+    
+    user = db.query(models.User).filter(models.User.username == credentials.username).first()
+    
+    if not user:
+        print("❌ REJECTED: That username does not exist in the database.")
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+        
+    if not verify_password(credentials.password, user.password_hash):
+        print("❌ REJECTED: The password does not match the saved hash.")
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+        
+    print("✅ SUCCESS: Passwords match, logging user in!")
     token = create_access_token(data={"sub": str(user.id)})
+    
     return {
         "access_token": token, 
         "token_type": "bearer",
@@ -281,7 +288,9 @@ def verify_change_password(
         db.commit()
         raise HTTPException(status_code=400, detail="OTP has expired")
 
-    current_user.password_hash = hash_password(request.new_password)
+    db_user = db.query(models.User).filter(models.User.email == current_user.email).first()
+    db_user.password_hash = hash_password(request.new_password)
+    
     db.delete(otp)
     db.commit()
 
