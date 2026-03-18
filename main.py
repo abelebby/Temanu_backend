@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 import random
 import datetime
 from fastapi.middleware.cors import CORSMiddleware
+import requests
+from fastapi import Header
 
 load_dotenv(dotenv_path="/Users/abel/Desktop/TemanU-backend/.env")
 
@@ -45,8 +47,12 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
         name=user.name,
         preferred_name=user.preferred_name,
         username=user.username,
-        password_hash= hash_password(user.password)
+        password_hash= hash_password(user.password),
+        gender=user.gender,
+        dob=user.dob,
+        blood_type=user.blood_type,
     )
+
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
@@ -58,7 +64,14 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
     if not user or not verify_password(credentials.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid username or password")
     token = create_access_token(data={"sub": str(user.id)})
-    return {"access_token": token, "token_type": "bearer"}
+    return {
+        "access_token": token, 
+        "token_type": "bearer",
+        "name": user.preferred_name, 
+        "email": user.email,
+        "full_name": user.name,
+        "username": user.username
+    }
 
     
 @app.post("/login/swagger")
@@ -72,7 +85,14 @@ def swagger_login(
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     token = create_access_token(data={"sub": str(user.id)})
-    return {"access_token": token, "token_type": "bearer"}    
+    return {
+        "access_token": token, 
+        "token_type": "bearer",
+        "name": user.preferred_name, 
+        "email": user.email,
+        "full_name": user.name,
+        "username": user.username
+    }
 
 # Example protected route — requires a valid JWT
 @app.get("/me", response_model=schemas.UserOut)
@@ -116,11 +136,11 @@ def get_activity(
 @app.post("/health", response_model=schemas.HealthMetricOut)
 def create_health_metric(
     metric: schemas.HealthMetricCreate,
-    db: Session = Depends(get_db)
-    # current_user: models.User = Depends(get_current_user) <--- Comment this out
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user) 
 ):
     new_metric = models.HealthMetric(
-        user_id=1, # Manually set this to 1 just for the test
+        user_id=current_user.id, 
         metric_type=metric.metric_type,
         value=metric.value,
         unit=metric.unit
@@ -266,3 +286,25 @@ def verify_change_password(
     db.commit()
 
     return {"message": "Password changed successfully"}
+
+@app.get("/fitbit/activity/{date}")
+def get_fitbit_activity(date: str, fitbit_token: str = Header(None)):
+    # 1. Make sure the Flutter app actually sent the Fitbit token
+    if not fitbit_token:
+        raise HTTPException(status_code=400, detail="Fitbit token missing")
+
+    # 2. Build the exact Fitbit URL you were trying to reach earlier
+    url = f"https://api.fitbit.com/1/user/-/activities/date/{date}.json"
+    
+    # 3. Attach the token to the header exactly how Fitbit expects it
+    headers = {"Authorization": f"Bearer {fitbit_token}"}
+
+    # 4. Have Python make the request (Bypasses CORS entirely!)
+    response = requests.get(url, headers=headers)
+
+    # 5. If Fitbit gets mad (e.g., expired token), tell the Flutter app
+    if response.status_code != 200:
+        raise HTTPException(status_code=response.status_code, detail="Fitbit API error")
+
+    # 6. Return the raw Fitbit JSON back to Flutter
+    return response.json()

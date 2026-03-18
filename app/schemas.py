@@ -7,7 +7,9 @@ class UserCreate(BaseModel):
     preferred_name: str
     username: str
     password: str  # plain password, hashed server-side
-
+    gender: str
+    dob: str
+    blood_type: str
 class UserLogin(BaseModel):
     username: str
     password: str

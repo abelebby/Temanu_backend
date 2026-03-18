@@ -12,6 +12,11 @@ class User(Base):
     preferred_name = Column(String(50), nullable=False)
     username = Column(String(50), unique=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
+    # --- NEW COLUMNS ---
+    gender = Column(String(20), nullable=True)
+    dob = Column(String(50), nullable=True) 
+    blood_type = Column(String(10), nullable=True)
+    # -------------------
     created_at = Column(TIMESTAMP, server_default=func.now())
 
 class Activity(Base):
