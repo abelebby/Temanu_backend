@@ -63,4 +63,16 @@ class FitbitToken(Base):
     access_token = Column(String(1000), nullable=False)
     refresh_token = Column(String(1000), nullable=True)
 
+class MealLog(Base):
+    __tablename__ = "meal_logs"
 
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    
+    name = Column(String(100), nullable=False)
+    calories = Column(Integer, nullable=False)
+    protein = Column(Float, default=0.0)
+    carbs = Column(Float, default=0.0)
+    fats = Column(Float, default=0.0)
+    
+    timestamp = Column(TIMESTAMP, server_default=func.now())

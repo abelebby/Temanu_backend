@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app import models, schemas
 from app.database import SessionLocal, engine
@@ -365,3 +366,104 @@ def verify_change_password(
     db.commit()
 
     return {"message": "Password changed successfully"}
+
+@app.post("/meals", response_model=schemas.MealOut)
+def log_meal(
+    meal: schemas.MealCreate, 
+    db: Session = Depends(get_db), 
+    current_user: models.User = Depends(get_current_user)
+):
+    new_meal = models.MealLog(
+        user_id=current_user.id,
+        name=meal.name,
+        calories=meal.calories,
+        protein=meal.protein,
+        carbs=meal.carbs,
+        fats=meal.fats
+    )
+    
+    db.add(new_meal)
+    db.commit()
+    db.refresh(new_meal)
+    return new_meal
+
+@app.get("/meals/today", response_model=list[schemas.MealOut])
+def get_todays_meals(
+    db: Session = Depends(get_db), 
+    current_user: models.User = Depends(get_current_user)
+):
+    # Ask the database for all meals matching the current user, where the timestamp date is today
+    today = datetime.date.today()
+    
+    meals = db.query(models.MealLog).filter(
+        models.MealLog.user_id == current_user.id,
+        func.date(models.MealLog.timestamp) == today
+    ).all()
+    
+    return meals
+
+@app.get("/insights/weekly")
+def get_weekly_insights(
+    db: Session = Depends(get_db), 
+    current_user: models.User = Depends(get_current_user)
+):
+    today = datetime.date.today()
+    seven_days_ago = today - datetime.timedelta(days=6) # Get the last 7 days inclusive
+
+    # 1. Grab 7 days of Meals and group them by date
+    meals = db.query(
+        func.date(models.MealLog.timestamp).label("date"),
+        func.sum(models.MealLog.calories).label("calories"),
+        func.sum(models.MealLog.protein).label("protein"),
+        func.sum(models.MealLog.carbs).label("carbs"),
+        func.sum(models.MealLog.fats).label("fats")
+    ).filter(
+        models.MealLog.user_id == current_user.id,
+        func.date(models.MealLog.timestamp) >= seven_days_ago
+    ).group_by(func.date(models.MealLog.timestamp)).all()
+
+    # Convert to a dictionary for easy lookup: {"2026-03-15": {"calories": 2000...}}
+    meal_dict = {
+        str(m.date): {
+            "consumed": m.calories or 0, 
+            "protein": m.protein or 0, 
+            "carbs": m.carbs or 0, 
+            "fats": m.fats or 0
+        } for m in meals
+    }
+
+    # 2. Grab 7 days of Fitbit Burn data (if linked)
+    fitbit_data = db.query(models.FitbitToken).filter(models.FitbitToken.user_id == current_user.id).first()
+    fitbit_dict = {}
+    
+    if fitbit_data and fitbit_data.access_token:
+        # Use Fitbit's Time Series API to get a whole week at once!
+        url = f"https://api.fitbit.com/1/user/-/activities/calories/date/{seven_days_ago}/{today}.json"
+        headers = {"Authorization": f"Bearer {fitbit_data.access_token}"}
+        response = requests.get(url, headers=headers)
+        
+        if response.status_code == 200:
+            fb_json = response.json()
+            for item in fb_json.get("activities-calories", []):
+                fitbit_dict[item["dateTime"]] = float(item["value"])
+
+    # 3. Merge them together into a perfect 7-day array for Flutter
+    results = []
+    for i in range(7):
+        current_date = today - datetime.timedelta(days=6-i)
+        date_str = str(current_date)
+        
+        day_meals = meal_dict.get(date_str, {"consumed": 0, "protein": 0, "carbs": 0, "fats": 0})
+        day_burned = fitbit_dict.get(date_str, 0)
+
+        results.append({
+            "date": date_str,
+            "day_name": current_date.strftime("%a"), # "Mon", "Tue", etc.
+            "consumed": day_meals["consumed"],
+            "burned": day_burned,
+            "protein": day_meals["protein"],
+            "carbs": day_meals["carbs"],
+            "fats": day_meals["fats"]
+        })
+        
+    return results
