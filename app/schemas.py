@@ -86,3 +86,28 @@ class RequestChangePasswordOTP(BaseModel):
 class VerifyChangePassword(BaseModel):
     code: str
     new_password: str
+
+class FitbitTokenSave(BaseModel):
+    access_token: str
+    refresh_token: Optional[str] = None
+
+# ===== Meal Log Schemas =====
+class MealCreate(BaseModel):
+    name: str
+    calories: int
+    protein: Optional[float] = 0.0
+    carbs: Optional[float] = 0.0
+    fats: Optional[float] = 0.0
+
+class MealOut(BaseModel):
+    id: int
+    user_id: int
+    name: str
+    calories: int
+    protein: float
+    carbs: float
+    fats: float
+    timestamp: datetime
+
+    class Config:
+        from_attributes = True

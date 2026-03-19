@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app import models, schemas
 from app.database import SessionLocal, engine
@@ -13,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import requests
 from fastapi import Header
 
-load_dotenv(dotenv_path="/Users/abel/Desktop/TemanU-backend/.env")
+load_dotenv()
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -73,33 +74,86 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
         "username": user.username
     }
 
-    
-@app.post("/login/swagger")
-def swagger_login(
-    form_data: OAuth2PasswordRequestForm = Depends(),
-    db: Session = Depends(get_db)
-):
-    user = db.query(models.User).filter(models.User.email == form_data.username).first()
-
-    if not user or not verify_password(form_data.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-
-    token = create_access_token(data={"sub": str(user.id)})
-    return {
-        "access_token": token, 
-        "token_type": "bearer",
-        "name": user.preferred_name, 
-        "email": user.email,
-        "full_name": user.name,
-        "username": user.username
-    }
-
 # Example protected route — requires a valid JWT
 @app.get("/me", response_model=schemas.UserOut)
 def get_me(current_user: models.User = Depends(get_current_user)):
     return current_user
 
+@app.delete("/users/me")
+def delete_account(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # 1. Sweep up all health metrics associated with this user
+    db.query(models.HealthMetric).filter(models.HealthMetric.user_id == current_user.id).delete()
+
+    # 2. Sweep up all activity metrics
+    db.query(models.Activity).filter(models.Activity.user_id == current_user.id).delete()
+
+    # 3. Delete any lingering OTP codes for their email
+    db.query(models.OTPCode).filter(models.OTPCode.email == current_user.email).delete()
+
+    # 4. --- THE FIX: Delete the user using the CURRENT session! ---
+    db.query(models.User).filter(models.User.id == current_user.id).delete()
+    db.commit()
+    # ---------------------------------------------------------------
+
+    return {"message": "Account and all associated data successfully deleted"}
+
+@app.post("/fitbit/link")
+def link_fitbit_account(
+    tokens: schemas.FitbitTokenSave,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # 1. Check if this user already has a linked Fitbit account
+    existing_link = db.query(models.FitbitToken).filter(models.FitbitToken.user_id == current_user.id).first()
+    
+    if existing_link:
+        # Update existing tokens
+        existing_link.access_token = tokens.access_token
+        existing_link.refresh_token = tokens.refresh_token
+    else:
+        # Create a brand new link
+        new_link = models.FitbitToken(
+            user_id=current_user.id,
+            access_token=tokens.access_token,
+            refresh_token=tokens.refresh_token
+        )
+        db.add(new_link)
+        
+    db.commit()
+    return {"message": "Fitbit successfully linked to your account!"}
+
 # Activity APIs
+@app.get("/fitbit/activity/{date}")
+def get_fitbit_activity(
+    date: str, 
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # 1. Look up the token in our new dedicated table
+    fitbit_data = db.query(models.FitbitToken).filter(models.FitbitToken.user_id == current_user.id).first()
+    
+    if not fitbit_data or not fitbit_data.access_token:
+        raise HTTPException(status_code=400, detail="Fitbit account not linked")
+
+    # 2. Fetch the data using their secure database token
+    url = f"https://api.fitbit.com/1/user/-/activities/date/{date}.json"
+    headers = {"Authorization": f"Bearer {fitbit_data.access_token}"}
+    response = requests.get(url, headers=headers)
+
+    # 3. Handle expired tokens by wiping the row so they can reconnect
+    if response.status_code == 401:
+        db.delete(fitbit_data)
+        db.commit()
+        raise HTTPException(status_code=401, detail="Fitbit token expired. Please reconnect.")
+        
+    if response.status_code != 200:
+        raise HTTPException(status_code=response.status_code, detail="Fitbit API error")
+
+    return response.json()
+
 @app.post("/activity", response_model=schemas.ActivityOut)
 def create_activity(
     activity: schemas.ActivityCreate,
@@ -305,30 +359,111 @@ def verify_change_password(
         db.commit()
         raise HTTPException(status_code=400, detail="OTP has expired")
 
-    current_user.password_hash = hash_password(request.new_password)
+    db_user = db.query(models.User).filter(models.User.email == current_user.email).first()
+    db_user.password_hash = hash_password(request.new_password)
+    
     db.delete(otp)
     db.commit()
 
     return {"message": "Password changed successfully"}
 
-@app.get("/fitbit/activity/{date}")
-def get_fitbit_activity(date: str, fitbit_token: str = Header(None)):
-    # 1. Make sure the Flutter app actually sent the Fitbit token
-    if not fitbit_token:
-        raise HTTPException(status_code=400, detail="Fitbit token missing")
-
-    # 2. Build the exact Fitbit URL you were trying to reach earlier
-    url = f"https://api.fitbit.com/1/user/-/activities/date/{date}.json"
+@app.post("/meals", response_model=schemas.MealOut)
+def log_meal(
+    meal: schemas.MealCreate, 
+    db: Session = Depends(get_db), 
+    current_user: models.User = Depends(get_current_user)
+):
+    new_meal = models.MealLog(
+        user_id=current_user.id,
+        name=meal.name,
+        calories=meal.calories,
+        protein=meal.protein,
+        carbs=meal.carbs,
+        fats=meal.fats
+    )
     
-    # 3. Attach the token to the header exactly how Fitbit expects it
-    headers = {"Authorization": f"Bearer {fitbit_token}"}
+    db.add(new_meal)
+    db.commit()
+    db.refresh(new_meal)
+    return new_meal
 
-    # 4. Have Python make the request (Bypasses CORS entirely!)
-    response = requests.get(url, headers=headers)
+@app.get("/meals/today", response_model=list[schemas.MealOut])
+def get_todays_meals(
+    db: Session = Depends(get_db), 
+    current_user: models.User = Depends(get_current_user)
+):
+    # Ask the database for all meals matching the current user, where the timestamp date is today
+    today = datetime.date.today()
+    
+    meals = db.query(models.MealLog).filter(
+        models.MealLog.user_id == current_user.id,
+        func.date(models.MealLog.timestamp) == today
+    ).all()
+    
+    return meals
 
-    # 5. If Fitbit gets mad (e.g., expired token), tell the Flutter app
-    if response.status_code != 200:
-        raise HTTPException(status_code=response.status_code, detail="Fitbit API error")
+@app.get("/insights/weekly")
+def get_weekly_insights(
+    db: Session = Depends(get_db), 
+    current_user: models.User = Depends(get_current_user)
+):
+    today = datetime.date.today()
+    seven_days_ago = today - datetime.timedelta(days=6) # Get the last 7 days inclusive
 
-    # 6. Return the raw Fitbit JSON back to Flutter
-    return response.json()
+    # 1. Grab 7 days of Meals and group them by date
+    meals = db.query(
+        func.date(models.MealLog.timestamp).label("date"),
+        func.sum(models.MealLog.calories).label("calories"),
+        func.sum(models.MealLog.protein).label("protein"),
+        func.sum(models.MealLog.carbs).label("carbs"),
+        func.sum(models.MealLog.fats).label("fats")
+    ).filter(
+        models.MealLog.user_id == current_user.id,
+        func.date(models.MealLog.timestamp) >= seven_days_ago
+    ).group_by(func.date(models.MealLog.timestamp)).all()
+
+    # Convert to a dictionary for easy lookup: {"2026-03-15": {"calories": 2000...}}
+    meal_dict = {
+        str(m.date): {
+            "consumed": m.calories or 0, 
+            "protein": m.protein or 0, 
+            "carbs": m.carbs or 0, 
+            "fats": m.fats or 0
+        } for m in meals
+    }
+
+    # 2. Grab 7 days of Fitbit Burn data (if linked)
+    fitbit_data = db.query(models.FitbitToken).filter(models.FitbitToken.user_id == current_user.id).first()
+    fitbit_dict = {}
+    
+    if fitbit_data and fitbit_data.access_token:
+        # Use Fitbit's Time Series API to get a whole week at once!
+        url = f"https://api.fitbit.com/1/user/-/activities/calories/date/{seven_days_ago}/{today}.json"
+        headers = {"Authorization": f"Bearer {fitbit_data.access_token}"}
+        response = requests.get(url, headers=headers)
+        
+        if response.status_code == 200:
+            fb_json = response.json()
+            for item in fb_json.get("activities-calories", []):
+                fitbit_dict[item["dateTime"]] = float(item["value"])
+
+    # 3. Merge them together into a perfect 7-day array for Flutter
+    results = []
+    for i in range(7):
+        current_date = today - datetime.timedelta(days=6-i)
+        date_str = str(current_date)
+        
+        day_meals = meal_dict.get(date_str, {"consumed": 0, "protein": 0, "carbs": 0, "fats": 0})
+        day_burned = fitbit_dict.get(date_str, 0)
+
+        results.append({
+            "date": date_str,
+            "day_name": current_date.strftime("%a"), # "Mon", "Tue", etc.
+            "consumed": day_meals["consumed"],
+            "burned": day_burned,
+            "protein": day_meals["protein"],
+            "carbs": day_meals["carbs"],
+            "fats": day_meals["fats"]
+        })
+        
+    return results
