@@ -73,40 +73,86 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
         "username": user.username
     }
 
-    
-@app.post("/login")
-def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
-    print("\n--- NEW LOGIN ATTEMPT ---")
-    print(f"Username typed: '{credentials.username}'")
-    
-    user = db.query(models.User).filter(models.User.username == credentials.username).first()
-    
-    if not user:
-        print("❌ REJECTED: That username does not exist in the database.")
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-        
-    if not verify_password(credentials.password, user.password_hash):
-        print("❌ REJECTED: The password does not match the saved hash.")
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-        
-    print("✅ SUCCESS: Passwords match, logging user in!")
-    token = create_access_token(data={"sub": str(user.id)})
-    
-    return {
-        "access_token": token, 
-        "token_type": "bearer",
-        "name": user.preferred_name, 
-        "email": user.email,
-        "full_name": user.name,
-        "username": user.username
-    }
-
 # Example protected route — requires a valid JWT
 @app.get("/me", response_model=schemas.UserOut)
 def get_me(current_user: models.User = Depends(get_current_user)):
     return current_user
 
+@app.delete("/users/me")
+def delete_account(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # 1. Sweep up all health metrics associated with this user
+    db.query(models.HealthMetric).filter(models.HealthMetric.user_id == current_user.id).delete()
+
+    # 2. Sweep up all activity metrics
+    db.query(models.Activity).filter(models.Activity.user_id == current_user.id).delete()
+
+    # 3. Delete any lingering OTP codes for their email
+    db.query(models.OTPCode).filter(models.OTPCode.email == current_user.email).delete()
+
+    # 4. --- THE FIX: Delete the user using the CURRENT session! ---
+    db.query(models.User).filter(models.User.id == current_user.id).delete()
+    db.commit()
+    # ---------------------------------------------------------------
+
+    return {"message": "Account and all associated data successfully deleted"}
+
+@app.post("/fitbit/link")
+def link_fitbit_account(
+    tokens: schemas.FitbitTokenSave,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # 1. Check if this user already has a linked Fitbit account
+    existing_link = db.query(models.FitbitToken).filter(models.FitbitToken.user_id == current_user.id).first()
+    
+    if existing_link:
+        # Update existing tokens
+        existing_link.access_token = tokens.access_token
+        existing_link.refresh_token = tokens.refresh_token
+    else:
+        # Create a brand new link
+        new_link = models.FitbitToken(
+            user_id=current_user.id,
+            access_token=tokens.access_token,
+            refresh_token=tokens.refresh_token
+        )
+        db.add(new_link)
+        
+    db.commit()
+    return {"message": "Fitbit successfully linked to your account!"}
+
 # Activity APIs
+@app.get("/fitbit/activity/{date}")
+def get_fitbit_activity(
+    date: str, 
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # 1. Look up the token in our new dedicated table
+    fitbit_data = db.query(models.FitbitToken).filter(models.FitbitToken.user_id == current_user.id).first()
+    
+    if not fitbit_data or not fitbit_data.access_token:
+        raise HTTPException(status_code=400, detail="Fitbit account not linked")
+
+    # 2. Fetch the data using their secure database token
+    url = f"https://api.fitbit.com/1/user/-/activities/date/{date}.json"
+    headers = {"Authorization": f"Bearer {fitbit_data.access_token}"}
+    response = requests.get(url, headers=headers)
+
+    # 3. Handle expired tokens by wiping the row so they can reconnect
+    if response.status_code == 401:
+        db.delete(fitbit_data)
+        db.commit()
+        raise HTTPException(status_code=401, detail="Fitbit token expired. Please reconnect.")
+        
+    if response.status_code != 200:
+        raise HTTPException(status_code=response.status_code, detail="Fitbit API error")
+
+    return response.json()
+
 @app.post("/activity", response_model=schemas.ActivityOut)
 def create_activity(
     activity: schemas.ActivityCreate,
@@ -319,25 +365,3 @@ def verify_change_password(
     db.commit()
 
     return {"message": "Password changed successfully"}
-
-@app.get("/fitbit/activity/{date}")
-def get_fitbit_activity(date: str, fitbit_token: str = Header(None)):
-    # 1. Make sure the Flutter app actually sent the Fitbit token
-    if not fitbit_token:
-        raise HTTPException(status_code=400, detail="Fitbit token missing")
-
-    # 2. Build the exact Fitbit URL you were trying to reach earlier
-    url = f"https://api.fitbit.com/1/user/-/activities/date/{date}.json"
-    
-    # 3. Attach the token to the header exactly how Fitbit expects it
-    headers = {"Authorization": f"Bearer {fitbit_token}"}
-
-    # 4. Have Python make the request (Bypasses CORS entirely!)
-    response = requests.get(url, headers=headers)
-
-    # 5. If Fitbit gets mad (e.g., expired token), tell the Flutter app
-    if response.status_code != 200:
-        raise HTTPException(status_code=response.status_code, detail="Fitbit API error")
-
-    # 6. Return the raw Fitbit JSON back to Flutter
-    return response.json()

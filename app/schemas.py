@@ -86,3 +86,7 @@ class RequestChangePasswordOTP(BaseModel):
 class VerifyChangePassword(BaseModel):
     code: str
     new_password: str
+
+class FitbitTokenSave(BaseModel):
+    access_token: str
+    refresh_token: Optional[str] = None

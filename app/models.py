@@ -51,3 +51,16 @@ class HealthMetric(Base):
     body_weight = Column(Float, nullable=True)               # e.g., kg
     
     timestamp = Column(TIMESTAMP, server_default=func.now())
+
+class FitbitToken(Base):
+    __tablename__ = "fitbit_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    # The Foreign Key links this token directly to a specific user
+    # unique=True ensures one user can't accidentally save 5 different Fitbit accounts
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
+    
+    access_token = Column(String(1000), nullable=False)
+    refresh_token = Column(String(1000), nullable=True)
+
+
