@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import requests
 from fastapi import Header
 
-load_dotenv(dotenv_path="/Users/abel/Desktop/TemanU-backend/.env")
+load_dotenv()
 
 models.Base.metadata.create_all(bind=engine)
 
