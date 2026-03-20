@@ -111,3 +111,23 @@ class MealOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+# ===== Medication Schemas =====
+class MedicationCreate(BaseModel):
+    name: str
+    dosage: str
+    inventory: float
+    unit: str
+    times: list[str]
+
+class MedicationOut(BaseModel):
+    id: int
+    name: str
+    dosage: str
+    inventory: float
+    unit: str
+    times: list[str]
+    doses_taken_today: int
+
+    class Config:
+        from_attributes = True

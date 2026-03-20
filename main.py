@@ -467,3 +467,112 @@ def get_weekly_insights(
         })
         
     return results
+
+@app.post("/medications", response_model=schemas.MedicationOut)
+def add_medication(
+    med: schemas.MedicationCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # Convert the list of times into a single string for the database
+    times_str = ",".join(med.times) if med.times else ""
+
+    new_med = models.Medication(
+        user_id=current_user.id,
+        name=med.name,
+        dosage=med.dosage,
+        inventory=med.inventory,
+        unit=med.unit,
+        times=times_str
+    )
+    db.add(new_med)
+    db.commit()
+    db.refresh(new_med)
+    
+    return schemas.MedicationOut(
+        id=new_med.id, name=new_med.name, dosage=new_med.dosage, 
+        inventory=new_med.inventory, unit=new_med.unit, 
+        times=med.times, doses_taken_today=0
+    )
+
+@app.get("/medications", response_model=list[schemas.MedicationOut])
+def get_medications(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    today = datetime.date.today()
+    meds = db.query(models.Medication).filter(models.Medication.user_id == current_user.id).all()
+    
+    results = []
+    for med in meds:
+        # Count exactly how many times they logged this pill today
+        doses_taken = db.query(models.MedicationLog).filter(
+            models.MedicationLog.medication_id == med.id,
+            func.date(models.MedicationLog.taken_at) == today
+        ).count()
+        
+        # Split the string back into a list for Flutter
+        times_list = med.times.split(",") if med.times else []
+        
+        results.append(schemas.MedicationOut(
+            id=med.id, name=med.name, dosage=med.dosage,
+            inventory=med.inventory, unit=med.unit,
+            times=times_list, doses_taken_today=doses_taken
+        ))
+        
+    return results
+
+@app.post("/medications/{med_id}/take")
+def take_medication(
+    med_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # 1. Find the pill
+    med = db.query(models.Medication).filter(
+        models.Medication.id == med_id, 
+        models.Medication.user_id == current_user.id
+    ).first()
+    
+    if not med:
+        raise HTTPException(status_code=404, detail="Medication not found")
+
+    # 2. Create the log stamp
+    new_log = models.MedicationLog(medication_id=med.id, user_id=current_user.id)
+    db.add(new_log)
+    
+    # 3. Safely figure out how much to subtract
+    try:
+        # Convert the string dosage (e.g. "2" or "1.5") into a float
+        dose_amount = float(med.dosage)
+    except ValueError:
+        # Fallback just in case there's old data with letters in it
+        dose_amount = 1.0 
+
+    # 4. Decrease the inventory by the EXACT dosage amount!
+    if med.inventory > 0:
+        med.inventory -= dose_amount
+        # Prevent it from going into negative numbers if they take the last partial dose
+        if med.inventory < 0:
+            med.inventory = 0 
+        
+    db.commit()
+    return {"message": "Medication logged successfully", "new_inventory": med.inventory}
+
+@app.delete("/medications/{med_id}")
+def delete_medication(
+    med_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    med = db.query(models.Medication).filter(
+        models.Medication.id == med_id, 
+        models.Medication.user_id == current_user.id
+    ).first()
+    
+    if not med:
+        raise HTTPException(status_code=404, detail="Medication not found")
+        
+    db.delete(med)
+    db.commit()
+    return {"message": "Medication deleted successfully"}
