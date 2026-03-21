@@ -9,16 +9,29 @@ from fastapi_mail import FastMail, MessageSchema, ConnectionConfig
 import os
 from dotenv import load_dotenv
 import random
-import datetime
+from datetime import date, timedelta, datetime
 from fastapi.middleware.cors import CORSMiddleware
 import requests
 from fastapi import Header
+from apscheduler.schedulers.background import BackgroundScheduler
+import smtplib
+from email.message import EmailMessage
+# Assuming your database session generator is called SessionLocal
+from app.database import SessionLocal
 
 load_dotenv()
 
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
+
+@app.on_event("startup")
+def start_scheduler():
+    scheduler = BackgroundScheduler()
+    # Runs the check_medications function every 60 seconds
+    scheduler.add_job(check_medications_and_notify, 'interval', minutes=1)
+    scheduler.start()
+    print("Background Medication Scheduler Started!")
 
 app.add_middleware(
     CORSMiddleware,
@@ -144,6 +157,77 @@ def get_fitbit_activity(
     response = requests.get(url, headers=headers)
 
     # 3. Handle expired tokens by wiping the row so they can reconnect
+    if response.status_code == 401:
+        db.delete(fitbit_data)
+        db.commit()
+        raise HTTPException(status_code=401, detail="Fitbit token expired. Please reconnect.")
+        
+    if response.status_code != 200:
+        raise HTTPException(status_code=response.status_code, detail="Fitbit API error")
+
+    return response.json()
+
+@app.get("/fitbit/steps/intraday/{date}")
+def get_fitbit_intraday_steps(
+    date: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # 1. Grab the user's Fitbit token
+    fitbit_data = db.query(models.FitbitToken).filter(models.FitbitToken.user_id == current_user.id).first()
+    if not fitbit_data or not fitbit_data.access_token:
+        raise HTTPException(status_code=400, detail="Fitbit account not linked")
+
+    # 2. THE FIX: Ask Fitbit for 15-minute intervals instead of 1hr
+    url = f"https://api.fitbit.com/1/user/-/activities/steps/date/{date}/1d/15min.json"
+    headers = {"Authorization": f"Bearer {fitbit_data.access_token}"}
+    response = requests.get(url, headers=headers)
+
+    if response.status_code == 401:
+        db.delete(fitbit_data)
+        db.commit()
+        raise HTTPException(status_code=401, detail="Fitbit token expired. Please reconnect.")
+        
+    if response.status_code != 200:
+        raise HTTPException(status_code=response.status_code, detail="Fitbit API error")
+
+    data = response.json()
+
+    # 3. Aggregate the 15-minute chunks into 24 hourly chunks for Flutter!
+    if "activities-steps-intraday" in data and "dataset" in data["activities-steps-intraday"]:
+        raw_dataset = data["activities-steps-intraday"]["dataset"]
+        
+        # Create a dictionary holding 24 hours, starting at 0 steps
+        hourly_data = {f"{i:02d}:00:00": 0 for i in range(24)}
+        
+        # Loop through the 15-minute increments and sum them up by hour
+        for item in raw_dataset:
+            hour_key = item["time"][:2] + ":00:00" # Grabs the "14" from "14:15:00"
+            hourly_data[hour_key] += int(item["value"])
+            
+        # Reformat it back into the array structure Flutter expects
+        aggregated_dataset = [{"time": k, "value": v} for k, v in hourly_data.items()]
+        data["activities-steps-intraday"]["dataset"] = aggregated_dataset
+
+    return data
+
+@app.get("/fitbit/steps/timeseries/{period}/{date}")
+def get_fitbit_timeseries_steps(
+    period: str,
+    date: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # 1. Grab the user's Fitbit token
+    fitbit_data = db.query(models.FitbitToken).filter(models.FitbitToken.user_id == current_user.id).first()
+    if not fitbit_data or not fitbit_data.access_token:
+        raise HTTPException(status_code=400, detail="Fitbit account not linked")
+
+    # 2. Hit the TIME SERIES endpoint
+    url = f"https://api.fitbit.com/1/user/-/activities/steps/date/{date}/{period}.json"
+    headers = {"Authorization": f"Bearer {fitbit_data.access_token}"}
+    response = requests.get(url, headers=headers)
+
     if response.status_code == 401:
         db.delete(fitbit_data)
         db.commit()
@@ -294,7 +378,7 @@ def reset_password(request: schemas.VerifyOTP, db: Session = Depends(get_db)):
     if not otp:
         raise HTTPException(status_code=400, detail="Invalid OTP")
 
-    if otp.expires_at < datetime.datetime.utcnow():
+    if otp.expires_at < datetime.utcnow():
         db.delete(otp)
         db.commit()
         raise HTTPException(status_code=400, detail="OTP has expired")
@@ -317,7 +401,7 @@ async def request_change_password_otp(
 ):
     # Generate OTP
     code = str(random.randint(100000, 999999))
-    expires_at = datetime.datetime.utcnow() + datetime.timedelta(minutes=15)
+    expires_at = datetime.utcnow() + timedelta(minutes=15)
 
     # Delete any existing OTP for this user
     db.query(models.OTPCode).filter(models.OTPCode.email == current_user.email).delete()
@@ -354,7 +438,7 @@ def verify_change_password(
     if not otp:
         raise HTTPException(status_code=400, detail="Invalid OTP")
 
-    if otp.expires_at < datetime.datetime.utcnow():
+    if otp.expires_at < datetime.utcnow():
         db.delete(otp)
         db.commit()
         raise HTTPException(status_code=400, detail="OTP has expired")
@@ -393,7 +477,7 @@ def get_todays_meals(
     current_user: models.User = Depends(get_current_user)
 ):
     # Ask the database for all meals matching the current user, where the timestamp date is today
-    today = datetime.date.today()
+    today = date.today()
     
     meals = db.query(models.MealLog).filter(
         models.MealLog.user_id == current_user.id,
@@ -407,8 +491,8 @@ def get_weekly_insights(
     db: Session = Depends(get_db), 
     current_user: models.User = Depends(get_current_user)
 ):
-    today = datetime.date.today()
-    seven_days_ago = today - datetime.timedelta(days=6) # Get the last 7 days inclusive
+    today = date.today()
+    seven_days_ago = today - timedelta(days=6) # Get the last 7 days inclusive
 
     # 1. Grab 7 days of Meals and group them by date
     meals = db.query(
@@ -450,7 +534,7 @@ def get_weekly_insights(
     # 3. Merge them together into a perfect 7-day array for Flutter
     results = []
     for i in range(7):
-        current_date = today - datetime.timedelta(days=6-i)
+        current_date = today - timedelta(days=6-i)
         date_str = str(current_date)
         
         day_meals = meal_dict.get(date_str, {"consumed": 0, "protein": 0, "carbs": 0, "fats": 0})
@@ -467,3 +551,280 @@ def get_weekly_insights(
         })
         
     return results
+
+@app.post("/medications", response_model=schemas.MedicationOut)
+def add_medication(
+    med: schemas.MedicationCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # Convert the list of times into a single string for the database
+    times_str = ",".join(med.times) if med.times else ""
+
+    new_med = models.Medication(
+        user_id=current_user.id,
+        name=med.name,
+        dosage=med.dosage,
+        inventory=med.inventory,
+        unit=med.unit,
+        times=times_str
+    )
+    db.add(new_med)
+    db.commit()
+    db.refresh(new_med)
+    
+    return schemas.MedicationOut(
+        id=new_med.id, name=new_med.name, dosage=new_med.dosage, 
+        inventory=new_med.inventory, unit=new_med.unit, 
+        times=med.times, doses_taken_today=0
+    )
+
+@app.get("/medications", response_model=list[schemas.MedicationOut])
+def get_medications(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    today = date.today()
+    meds = db.query(models.Medication).filter(models.Medication.user_id == current_user.id).all()
+    
+    results = []
+    for med in meds:
+        # 1. Calculate today's taken doses
+        doses_taken = db.query(models.MedicationLog).filter(
+            models.MedicationLog.medication_id == med.id,
+            func.date(models.MedicationLog.taken_at) == today
+        ).count()
+        
+        times_list = med.times.split(",") if med.times else []
+        doses_per_day = len(times_list) if times_list else 1
+        
+        # --- THE INDIVIDUAL ADHERENCE MATH ---
+        # 2. Figure out how many days it has been active (Max 6 past days + today = 7 day window)
+        created_date = med.created_at.date() if med.created_at else today
+        delta_days = (today - created_date).days
+        past_days = min(6, max(0, delta_days)) 
+            
+        expected_past_doses = past_days * doses_per_day
+        
+        # Today's doses are only added to the expected total if they were ACTUALLY taken
+        expected_total = expected_past_doses + doses_taken
+        
+        # 3. Get the actual taken doses from the past days
+        if past_days > 0:
+            start_date = today - timedelta(days=past_days)
+            taken_past = db.query(models.MedicationLog).filter(
+                models.MedicationLog.medication_id == med.id,
+                func.date(models.MedicationLog.taken_at) >= start_date,
+                func.date(models.MedicationLog.taken_at) < today
+            ).count()
+        else:
+            taken_past = 0
+            
+        taken_total = taken_past + doses_taken
+        
+        # 4. Calculate final percentage
+        if expected_total == 0:
+            adherence_score = 100
+        else:
+            # round() handles things like 66.6 -> 67%
+            adherence_score = int(round((taken_total / expected_total) * 100))
+        # -------------------------------------
+        
+        results.append(schemas.MedicationOut(
+            id=med.id, name=med.name, dosage=med.dosage,
+            inventory=med.inventory, unit=med.unit,
+            times=times_list, doses_taken_today=doses_taken,
+            adherence_score=adherence_score  # Push the new score to Flutter!
+        ))
+        
+    return results
+
+@app.post("/medications/{med_id}/take")
+def take_medication(
+    med_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # 1. Find the pill
+    med = db.query(models.Medication).filter(
+        models.Medication.id == med_id, 
+        models.Medication.user_id == current_user.id
+    ).first()
+    
+    if not med:
+        raise HTTPException(status_code=404, detail="Medication not found")
+
+    # 2. Create the log stamp
+    new_log = models.MedicationLog(medication_id=med.id, user_id=current_user.id)
+    db.add(new_log)
+    
+    # 3. Safely figure out how much to subtract
+    try:
+        # Convert the string dosage (e.g. "2" or "1.5") into a float
+        dose_amount = float(med.dosage)
+    except ValueError:
+        # Fallback just in case there's old data with letters in it
+        dose_amount = 1.0 
+
+    # 4. Decrease the inventory by the EXACT dosage amount!
+    if med.inventory > 0:
+        med.inventory -= dose_amount
+        # Prevent it from going into negative numbers if they take the last partial dose
+        if med.inventory < 0:
+            med.inventory = 0 
+        
+    db.commit()
+    return {"message": "Medication logged successfully", "new_inventory": med.inventory}
+
+@app.delete("/medications/{med_id}")
+def delete_medication(
+    med_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    med = db.query(models.Medication).filter(
+        models.Medication.id == med_id, 
+        models.Medication.user_id == current_user.id
+    ).first()
+    
+    if not med:
+        raise HTTPException(status_code=404, detail="Medication not found")
+        
+    db.delete(med)
+    db.commit()
+    return {"message": "Medication deleted successfully"}
+
+@app.get("/medications/adherence")
+def get_medication_adherence(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    today = date.today()
+    seven_days_ago = today - timedelta(days=6)
+
+    # 1. Get all active medications
+    meds = db.query(models.Medication).filter(models.Medication.user_id == current_user.id).all()
+    
+    if not meds:
+        return {"adherence_percentage": 0}
+        
+    # 2. Calculate how many doses they SHOULD have taken in 7 days
+    total_expected_doses = 0
+    for med in meds:
+        times_list = med.times.split(",") if med.times else ["Anytime"]
+        total_expected_doses += len(times_list) * 7
+
+    # 3. Count how many they ACTUALLY took in the last 7 days
+    taken_logs_count = db.query(models.MedicationLog).join(models.Medication).filter(
+        models.Medication.user_id == current_user.id,
+        func.date(models.MedicationLog.taken_at) >= seven_days_ago,
+        func.date(models.MedicationLog.taken_at) <= today
+    ).count()
+
+    if total_expected_doses == 0:
+        return {"adherence_percentage": 0}
+
+    # 4. Calculate the percentage (cap at 100% just in case of over-logging)
+    adherence = (taken_logs_count / total_expected_doses) * 100
+    return {"adherence_percentage": min(int(adherence), 100)}
+
+@app.put("/medications/{med_id}", response_model=schemas.MedicationOut)
+def edit_medication(
+    med_id: int,
+    med: schemas.MedicationCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # 1. Find the existing medication
+    db_med = db.query(models.Medication).filter(
+        models.Medication.id == med_id, 
+        models.Medication.user_id == current_user.id
+    ).first()
+    
+    if not db_med:
+        raise HTTPException(status_code=404, detail="Medication not found")
+        
+    # 2. Update all the fields
+    times_str = ",".join(med.times) if med.times else ""
+    db_med.name = med.name
+    db_med.dosage = med.dosage
+    db_med.inventory = med.inventory
+    db_med.unit = med.unit
+    db_med.times = times_str
+    
+    db.commit()
+    db.refresh(db_med)
+    
+    # 3. Calculate how many doses were taken today so Flutter doesn't break
+    today = date.today()
+    doses_taken = db.query(models.MedicationLog).filter(
+        models.MedicationLog.medication_id == db_med.id,
+        func.date(models.MedicationLog.taken_at) == today
+    ).count()
+    
+    times_list = db_med.times.split(",") if db_med.times else []
+    
+    return schemas.MedicationOut(
+        id=db_med.id, name=db_med.name, dosage=db_med.dosage,
+        inventory=db_med.inventory, unit=db_med.unit,
+        times=times_list, doses_taken_today=doses_taken
+    )
+
+# ==========================================
+# MEDICATION EMAIL SCHEDULER
+# ==========================================
+
+SMTP_SERVER = "smtp.gmail.com"
+SMTP_PORT = 465 
+SENDER_EMAIL = os.getenv("MAIL_EMAIL")
+SENDER_PASSWORD = os.getenv("MAIL_PASSWORD")
+
+def send_medication_email(to_email, user_name, med_name, dosage, unit):
+    msg = EmailMessage()
+    msg.set_content(
+        f"Hi {user_name},\n\n"
+        f"It is time to take your medication: {dosage} {unit} of {med_name}.\n\n"
+        f"Don't forget to log it in your Temanu dashboard once taken!\n\n"
+        f"Stay healthy,\nThe Temanu Team"
+    )
+    msg['Subject'] = f"💊 Reminder: Time to take your {med_name}"
+    msg['From'] = SENDER_EMAIL
+    msg['To'] = to_email
+
+    try:
+        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
+            server.login(SENDER_EMAIL, SENDER_PASSWORD)
+            server.send_message(msg)
+            print(f"Email sent successfully to {to_email} for {med_name}")
+    except Exception as e:
+        print(f"Failed to send email: {e}")
+
+def check_medications_and_notify():
+    # 1. Get current time in the exact format saved in the DB (e.g., "08:00 AM")
+    current_time_str = datetime.now().strftime("%I:%M %p")
+    
+    # 2. Open a fresh DB session (required because this runs in a background thread)
+    db = SessionLocal()
+    try:
+        # 3. Query all medications
+        meds = db.query(models.Medication).all()
+        for med in meds:
+            # 4. If the exact current minute is in their schedule string
+            if med.times and current_time_str in med.times:
+                # Find the user to get their email address
+                user = db.query(models.User).filter(models.User.id == med.user_id).first()
+                if user and user.email:
+                    # Optional: Add logic here to check 'MedicationLog' to see if 
+                    # they ALREADY took it today before spamming them!
+                    
+                    send_medication_email(
+                        to_email=user.email,
+                        user_name=user.preferred_name or "there",
+                        med_name=med.name,
+                        dosage=med.dosage,
+                        unit=med.unit
+                    )
+    finally:
+        db.close() # Always close background DB sessions safely
+
+# ==========================================

@@ -76,3 +76,27 @@ class MealLog(Base):
     fats = Column(Float, default=0.0)
     
     timestamp = Column(TIMESTAMP, server_default=func.now())
+
+class Medication(Base):
+    __tablename__ = "medications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    
+    name = Column(String(100), nullable=False)
+    dosage = Column(String(50), nullable=True) 
+    inventory = Column(Float, default=0.0)    
+    
+    unit = Column(String(50), default="pills") # e.g., ml, puffs, drops
+    times = Column(String(255), nullable=True) # e.g., "08:00 AM,08:00 PM"
+    
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+class MedicationLog(Base):
+    __tablename__ = "medication_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    medication_id = Column(Integer, ForeignKey("medications.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    
+    taken_at = Column(TIMESTAMP, server_default=func.now())
