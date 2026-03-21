@@ -167,6 +167,77 @@ def get_fitbit_activity(
 
     return response.json()
 
+@app.get("/fitbit/steps/intraday/{date}")
+def get_fitbit_intraday_steps(
+    date: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # 1. Grab the user's Fitbit token
+    fitbit_data = db.query(models.FitbitToken).filter(models.FitbitToken.user_id == current_user.id).first()
+    if not fitbit_data or not fitbit_data.access_token:
+        raise HTTPException(status_code=400, detail="Fitbit account not linked")
+
+    # 2. THE FIX: Ask Fitbit for 15-minute intervals instead of 1hr
+    url = f"https://api.fitbit.com/1/user/-/activities/steps/date/{date}/1d/15min.json"
+    headers = {"Authorization": f"Bearer {fitbit_data.access_token}"}
+    response = requests.get(url, headers=headers)
+
+    if response.status_code == 401:
+        db.delete(fitbit_data)
+        db.commit()
+        raise HTTPException(status_code=401, detail="Fitbit token expired. Please reconnect.")
+        
+    if response.status_code != 200:
+        raise HTTPException(status_code=response.status_code, detail="Fitbit API error")
+
+    data = response.json()
+
+    # 3. Aggregate the 15-minute chunks into 24 hourly chunks for Flutter!
+    if "activities-steps-intraday" in data and "dataset" in data["activities-steps-intraday"]:
+        raw_dataset = data["activities-steps-intraday"]["dataset"]
+        
+        # Create a dictionary holding 24 hours, starting at 0 steps
+        hourly_data = {f"{i:02d}:00:00": 0 for i in range(24)}
+        
+        # Loop through the 15-minute increments and sum them up by hour
+        for item in raw_dataset:
+            hour_key = item["time"][:2] + ":00:00" # Grabs the "14" from "14:15:00"
+            hourly_data[hour_key] += int(item["value"])
+            
+        # Reformat it back into the array structure Flutter expects
+        aggregated_dataset = [{"time": k, "value": v} for k, v in hourly_data.items()]
+        data["activities-steps-intraday"]["dataset"] = aggregated_dataset
+
+    return data
+
+@app.get("/fitbit/steps/timeseries/{period}/{date}")
+def get_fitbit_timeseries_steps(
+    period: str,
+    date: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # 1. Grab the user's Fitbit token
+    fitbit_data = db.query(models.FitbitToken).filter(models.FitbitToken.user_id == current_user.id).first()
+    if not fitbit_data or not fitbit_data.access_token:
+        raise HTTPException(status_code=400, detail="Fitbit account not linked")
+
+    # 2. Hit the TIME SERIES endpoint
+    url = f"https://api.fitbit.com/1/user/-/activities/steps/date/{date}/{period}.json"
+    headers = {"Authorization": f"Bearer {fitbit_data.access_token}"}
+    response = requests.get(url, headers=headers)
+
+    if response.status_code == 401:
+        db.delete(fitbit_data)
+        db.commit()
+        raise HTTPException(status_code=401, detail="Fitbit token expired. Please reconnect.")
+        
+    if response.status_code != 200:
+        raise HTTPException(status_code=response.status_code, detail="Fitbit API error")
+
+    return response.json()
+
 @app.post("/activity", response_model=schemas.ActivityOut)
 def create_activity(
     activity: schemas.ActivityCreate,
