@@ -1,11 +1,11 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from datetime import date
 from datetime import datetime
 from typing import Optional
 from typing import Optional
 
 class UserCreate(BaseModel):
-    email: str
+    email: EmailStr
     name: str
     preferred_name: str
     username: str
@@ -14,6 +14,7 @@ class UserCreate(BaseModel):
     dob: str
     blood_type: str
     otp_code: str
+
 class UserLogin(BaseModel):
     username: str
     password: str
@@ -34,7 +35,11 @@ class UserUpdate(BaseModel):
     gender: Optional[str] = None
     dob: Optional[str] = None
     blood_type: Optional[str] = None
-    
+
+class VerifyRegistrationOTP(BaseModel):
+    email: EmailStr
+    code: str
+
 # ===== Activity Schemas =====
 class ActivityCreate(BaseModel):
     user_id: int
@@ -80,7 +85,9 @@ class HealthMetricOut(BaseModel):
 
 
 class RequestOTP(BaseModel):
-    email: str
+    email: EmailStr
+    username: str
+    password: str
 
 class VerifyOTP(BaseModel):
     email: str

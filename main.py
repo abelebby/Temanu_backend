@@ -82,27 +82,36 @@ def validate_strong_password(password: str) -> str | None:
 
 @app.post("/register/request-otp")
 async def request_registration_otp(request: schemas.RequestOTP, db: Session = Depends(get_db)):
-    # 1. Check if email is already registered before sending an email
+    # 1. Check if Username is already taken
+    if db.query(models.User).filter(models.User.username == request.username).first():
+        raise HTTPException(status_code=400, detail="Username is already taken")
+
+    # 2. Check Password Strength
+    password_error = validate_strong_password(request.password)
+    if password_error:
+        raise HTTPException(status_code=400, detail=password_error)
+
+    # 3. Check if Email is already registered
     if db.query(models.User).filter(models.User.email == request.email).first():
         raise HTTPException(status_code=400, detail="Email is already registered")
 
-    # 2. Generate a 6-digit OTP
+    # 4. Generate a 6-digit OTP
     code = str(random.randint(100000, 999999))
     expires_at = datetime.utcnow() + timedelta(minutes=15)
 
-    # 3. Clear any existing OTPs for this email so they don't pile up
+    # 5. Clear any existing OTPs for this email
     db.query(models.OTPCode).filter(models.OTPCode.email == request.email).delete()
 
-    # 4. Save the new OTP
+    # 6. Save the new OTP
     otp = models.OTPCode(email=request.email, code=code, expires_at=expires_at)
     db.add(otp)
     db.commit()
 
-    # 5. Send the email using your existing FastMail setup
+    # 7. Send the email
     message = MessageSchema(
         subject="TemanU Registration Verification",
         recipients=[request.email],
-        body=f"Welcome to TemanU!\n\nYour registration verification code is: {code}\n\nThis code expires in 15 minutes. Please enter it in the app to complete your account setup.",
+        body=f"Welcome to TemanU!\n\nYour registration verification code is: {code}\n\nThis code expires in 15 minutes.",
         subtype="plain"
     )
     fm = FastMail(mail_config)
@@ -111,7 +120,7 @@ async def request_registration_otp(request: schemas.RequestOTP, db: Session = De
     return {"message": "Verification OTP sent to your email"}
 
 @app.post("/register/verify-otp")
-def verify_registration_otp(request: schemas.VerifyOTP, db: Session = Depends(get_db)):
+def verify_registration_otp(request: schemas.VerifyRegistrationOTP, db: Session = Depends(get_db)):
     otp = db.query(models.OTPCode).filter(
         models.OTPCode.email == request.email,
         models.OTPCode.code == request.code
@@ -123,7 +132,6 @@ def verify_registration_otp(request: schemas.VerifyOTP, db: Session = Depends(ge
     if otp.expires_at < datetime.utcnow():
         raise HTTPException(status_code=400, detail="Verification code has expired.")
 
-    # Note: We do NOT delete the OTP here, because the final /register route still needs to consume it!
     return {"message": "OTP verified successfully"}
 
 
