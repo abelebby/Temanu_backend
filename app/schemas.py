@@ -2,16 +2,18 @@ from pydantic import BaseModel
 from datetime import date
 from datetime import datetime
 from typing import Optional
+from typing import Optional
 
 class UserCreate(BaseModel):
     email: str
     name: str
     preferred_name: str
     username: str
-    password: str  # plain password, hashed server-side
+    password: str
     gender: str
     dob: str
     blood_type: str
+    otp_code: str
 class UserLogin(BaseModel):
     username: str
     password: str
@@ -26,7 +28,13 @@ class UserOut(BaseModel):
 
     class Config:
         from_attributes = True
-
+class UserUpdate(BaseModel):
+    name: Optional[str] = None
+    preferred_name: Optional[str] = None
+    gender: Optional[str] = None
+    dob: Optional[str] = None
+    blood_type: Optional[str] = None
+    
 # ===== Activity Schemas =====
 class ActivityCreate(BaseModel):
     user_id: int

@@ -16,6 +16,8 @@ from fastapi import Header
 from apscheduler.schedulers.background import BackgroundScheduler
 import smtplib
 from email.message import EmailMessage
+import re 
+
 # Assuming your database session generator is called SessionLocal
 from app.database import SessionLocal
 
@@ -24,6 +26,17 @@ load_dotenv()
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
+
+mail_config = ConnectionConfig(
+    MAIL_USERNAME=os.getenv("MAIL_EMAIL"),
+    MAIL_PASSWORD=os.getenv("MAIL_PASSWORD"),
+    MAIL_FROM=os.getenv("MAIL_EMAIL"),
+    MAIL_PORT=587,
+    MAIL_SERVER="smtp.gmail.com",
+    MAIL_STARTTLS=True,
+    MAIL_SSL_TLS=False,
+    USE_CREDENTIALS=True
+)
 
 @app.on_event("startup")
 def start_scheduler():
@@ -48,28 +61,118 @@ def get_db():
     finally:
         database.close()
 
+# ==========================================
+# NEW: Global Password Validator
+# ==========================================
+def validate_strong_password(password: str) -> str | None:
+    if len(password) < 8:
+        return "Must be at least 8 characters long"
+    if not re.search(r"[A-Z]", password):
+        return "Must contain at least one uppercase letter"
+    if not re.search(r"[a-z]", password):
+        return "Must contain at least one lowercase letter"
+    if not re.search(r"[0-9]", password):
+        return "Must contain at least one number"
+    if not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
+        return "Must contain at least one special symbol"
+    
+    return None # Return None if it passes all checks
+
+# ==========================================
+
+@app.post("/register/request-otp")
+async def request_registration_otp(request: schemas.RequestOTP, db: Session = Depends(get_db)):
+    # 1. Check if email is already registered before sending an email
+    if db.query(models.User).filter(models.User.email == request.email).first():
+        raise HTTPException(status_code=400, detail="Email is already registered")
+
+    # 2. Generate a 6-digit OTP
+    code = str(random.randint(100000, 999999))
+    expires_at = datetime.utcnow() + timedelta(minutes=15)
+
+    # 3. Clear any existing OTPs for this email so they don't pile up
+    db.query(models.OTPCode).filter(models.OTPCode.email == request.email).delete()
+
+    # 4. Save the new OTP
+    otp = models.OTPCode(email=request.email, code=code, expires_at=expires_at)
+    db.add(otp)
+    db.commit()
+
+    # 5. Send the email using your existing FastMail setup
+    message = MessageSchema(
+        subject="TemanU Registration Verification",
+        recipients=[request.email],
+        body=f"Welcome to TemanU!\n\nYour registration verification code is: {code}\n\nThis code expires in 15 minutes. Please enter it in the app to complete your account setup.",
+        subtype="plain"
+    )
+    fm = FastMail(mail_config)
+    await fm.send_message(message)
+
+    return {"message": "Verification OTP sent to your email"}
+
+@app.post("/register/verify-otp")
+def verify_registration_otp(request: schemas.VerifyOTP, db: Session = Depends(get_db)):
+    otp = db.query(models.OTPCode).filter(
+        models.OTPCode.email == request.email,
+        models.OTPCode.code == request.code
+    ).first()
+
+    if not otp:
+        raise HTTPException(status_code=400, detail="Invalid Verification Code")
+
+    if otp.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Verification code has expired.")
+
+    # Note: We do NOT delete the OTP here, because the final /register route still needs to consume it!
+    return {"message": "OTP verified successfully"}
+
+
 @app.post("/register")
 def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
-    # Check if email or username already exists
+    # 1. --- NEW: Verify the OTP First! ---
+    otp = db.query(models.OTPCode).filter(
+        models.OTPCode.email == user.email,
+        models.OTPCode.code == user.otp_code
+    ).first()
+
+    if not otp:
+        raise HTTPException(status_code=400, detail="Invalid Verification Code")
+
+    if otp.expires_at < datetime.utcnow():
+        db.delete(otp)
+        db.commit()
+        raise HTTPException(status_code=400, detail="Verification code has expired. Please request a new one.")
+
+    # 2. Check if email or username already exists
     if db.query(models.User).filter(models.User.email == user.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
     if db.query(models.User).filter(models.User.username == user.username).first():
         raise HTTPException(status_code=400, detail="Username already taken")
 
+    # 3. Check Password Strength (from our previous step!)
+    password_error = validate_strong_password(user.password)
+    if password_error:
+        raise HTTPException(status_code=400, detail=password_error)
+
+    # 4. Create the User
     new_user = models.User(
         email=user.email,
         name=user.name,
         preferred_name=user.preferred_name,
         username=user.username,
-        password_hash= hash_password(user.password),
+        password_hash=hash_password(user.password),
         gender=user.gender,
         dob=user.dob,
         blood_type=user.blood_type,
     )
 
     db.add(new_user)
+    
+    # 5. Clean up the used OTP
+    db.delete(otp)
     db.commit()
     db.refresh(new_user)
+    
     return {"message": "User created successfully", "id": new_user.id}
 
 @app.post("/login")
@@ -92,6 +195,30 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
 def get_me(current_user: models.User = Depends(get_current_user)):
     return current_user
 
+@app.put("/users/me", response_model=schemas.UserOut)
+def update_user_profile(
+    update_data: schemas.UserUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # 1. Re-fetch the user so it is securely attached to the CURRENT session
+    db_user = db.query(models.User).filter(models.User.id == current_user.id).first()
+
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # 2. Apply the updates to the newly fetched object
+    if update_data.name: db_user.name = update_data.name
+    if update_data.preferred_name: db_user.preferred_name = update_data.preferred_name
+    if update_data.gender: db_user.gender = update_data.gender
+    if update_data.dob: db_user.dob = update_data.dob
+    if update_data.blood_type: db_user.blood_type = update_data.blood_type
+
+    # 3. Commit and refresh safely!
+    db.commit()
+    db.refresh(db_user)
+    
+    return db_user
 @app.delete("/users/me")
 def delete_account(
     db: Session = Depends(get_db),
@@ -324,17 +451,6 @@ def get_latest_health_metric(
 
     return latest_metric
 
-# Password Reset APIs
-mail_config = ConnectionConfig(
-    MAIL_USERNAME=os.getenv("MAIL_EMAIL"),
-    MAIL_PASSWORD=os.getenv("MAIL_PASSWORD"),
-    MAIL_FROM=os.getenv("MAIL_EMAIL"),
-    MAIL_PORT=587,
-    MAIL_SERVER="smtp.gmail.com",
-    MAIL_STARTTLS=True,
-    MAIL_SSL_TLS=False,
-    USE_CREDENTIALS=True
-)
 
 import random
 # Endpoint to request password reset OTP
@@ -386,6 +502,10 @@ def reset_password(request: schemas.VerifyOTP, db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.email == request.email).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    password_error = validate_strong_password(request.new_password)
+    if password_error:
+        raise HTTPException(status_code=400, detail=password_error)
 
     user.password_hash = hash_password(request.new_password)
     db.delete(otp)
@@ -442,6 +562,10 @@ def verify_change_password(
         db.delete(otp)
         db.commit()
         raise HTTPException(status_code=400, detail="OTP has expired")
+
+    password_error = validate_strong_password(request.new_password)
+    if password_error:
+        raise HTTPException(status_code=400, detail=password_error)
 
     db_user = db.query(models.User).filter(models.User.email == current_user.email).first()
     db_user.password_hash = hash_password(request.new_password)
