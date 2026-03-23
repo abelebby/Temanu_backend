@@ -17,6 +17,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import smtplib
 from email.message import EmailMessage
 import re 
+from openai import OpenAI
 
 # Assuming your database session generator is called SessionLocal
 from app.database import SessionLocal
@@ -959,4 +960,117 @@ def check_medications_and_notify():
     finally:
         db.close() # Always close background DB sessions safely
 
-# ==========================================
+
+@app.post("/chat")
+def chat(
+    request: schemas.ChatRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # ── Layer 1: Current snapshot ──
+    today = date.today()
+    
+    latest_health = db.query(models.HealthMetric).filter(
+        models.HealthMetric.user_id == current_user.id
+    ).order_by(models.HealthMetric.timestamp.desc()).first()
+
+    todays_meals = db.query(models.MealLog).filter(
+        models.MealLog.user_id == current_user.id,
+        func.date(models.MealLog.timestamp) == today
+    ).all()
+
+    todays_activity = db.query(models.Activity).filter(
+        models.Activity.user_id == current_user.id,
+        models.Activity.date == today
+    ).first()
+
+    meds = db.query(models.Medication).filter(
+        models.Medication.user_id == current_user.id
+    ).all()
+
+    med_summary = []
+    for med in meds:
+        doses_taken_today = db.query(models.MedicationLog).filter(
+            models.MedicationLog.medication_id == med.id,
+            func.date(models.MedicationLog.taken_at) == today
+        ).count()
+        med_summary.append(f"{med.name} {med.dosage}{med.unit} - taken {doses_taken_today} time(s) today")
+
+    # ── Layer 2: 30 day history ──
+    thirty_days_ago = today - timedelta(days=30)
+
+    health_history = db.query(models.HealthMetric).filter(
+        models.HealthMetric.user_id == current_user.id,
+        models.HealthMetric.timestamp >= thirty_days_ago
+    ).order_by(models.HealthMetric.timestamp.desc()).all()
+
+    meal_history = db.query(
+        func.date(models.MealLog.timestamp).label("date"),
+        func.sum(models.MealLog.calories).label("calories"),
+        func.avg(models.MealLog.protein).label("protein"),
+        func.avg(models.MealLog.sodium if hasattr(models.MealLog, 'sodium') else models.MealLog.fats).label("fats")
+    ).filter(
+        models.MealLog.user_id == current_user.id,
+        func.date(models.MealLog.timestamp) >= thirty_days_ago
+    ).group_by(func.date(models.MealLog.timestamp)).all()
+
+    # ── Build system prompt ──
+    system_prompt = f"""You are TemanU, a personal heart health assistant for elderly patients with heart conditions.
+
+PATIENT PROFILE:
+- Name: {current_user.preferred_name}
+- Age: {current_user.dob}
+- Gender: {current_user.gender}
+- Blood Type: {current_user.blood_type}
+
+CURRENT DATA (Today - {today}):
+- Blood Pressure: {f"{latest_health.blood_pressure_systolic}/{latest_health.blood_pressure_diastolic} mmHg" if latest_health and latest_health.blood_pressure_systolic else "Not recorded today"}
+- Heart Rate: {f"{latest_health.heart_rate} bpm" if latest_health and latest_health.heart_rate else "Not recorded today"}
+- Blood Glucose: {f"{latest_health.blood_glucose} mg/dL" if latest_health and latest_health.blood_glucose else "Not recorded today"}
+- Oxygen Saturation: {f"{latest_health.oxygen_saturation}%" if latest_health and latest_health.oxygen_saturation else "Not recorded today"}
+- Body Weight: {f"{latest_health.body_weight} kg" if latest_health and latest_health.body_weight else "Not recorded today"}
+- Steps Today: {todays_activity.steps if todays_activity else "No activity recorded"}
+- Meals Today: {f"{len(todays_meals)} meals, {sum(m.calories for m in todays_meals)} kcal total" if todays_meals else "No meals logged"}
+- Medications Today: {chr(10).join(med_summary) if med_summary else "No medications recorded"}
+
+30 DAY HISTORY SUMMARY:
+- Total health readings: {len(health_history)}
+- Average blood pressure: {f"{sum(h.blood_pressure_systolic for h in health_history if h.blood_pressure_systolic) // max(1, sum(1 for h in health_history if h.blood_pressure_systolic))}/{sum(h.blood_pressure_diastolic for h in health_history if h.blood_pressure_diastolic) // max(1, sum(1 for h in health_history if h.blood_pressure_diastolic))} mmHg" if health_history else "No data"}
+- Average heart rate: {f"{sum(h.heart_rate for h in health_history if h.heart_rate) // max(1, sum(1 for h in health_history if h.heart_rate))} bpm" if health_history else "No data"}
+- Average blood glucose: {f"{sum(h.blood_glucose for h in health_history if h.blood_glucose) / max(1, sum(1 for h in health_history if h.blood_glucose)):.1f} mg/dL" if health_history else "No data"}
+- Meal days logged: {len(meal_history)} out of last 30 days
+
+STRICT RULES YOU MUST FOLLOW:
+1. Only discuss topics related to heart health, medications, diet, activity and the patient's data
+2. Always use simple, clear language suitable for elderly patients
+3. Never diagnose conditions — only inform and suggest
+4. For any chest pain, severe dizziness, or emergency symptoms always say "Call emergency services immediately"
+5. Always recommend consulting their doctor for medical decisions
+6. Be warm, encouraging and patient
+7. If asked about something unrelated to health, politely redirect back to health topics
+8. Flag any dangerous readings — blood pressure above 180/120, heart rate above 100 or below 50, oxygen below 90%
+"""
+
+    # ── Build messages array ──
+    messages = [{"role": "system", "content": system_prompt}]
+    
+    # Add conversation history from Flutter
+    for msg in request.history:
+        messages.append({"role": msg.role, "content": msg.content})
+    
+    # Add current message
+    messages.append({"role": "user", "content": request.message})
+
+    # ── Call OpenAI ──
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",  # cheap and fast, good for this use case
+        messages=messages,
+        max_tokens=500,
+        temperature=0.7
+    )
+
+    reply = response.choices[0].message.content
+
+    return {"reply": reply}

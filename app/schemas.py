@@ -145,5 +145,13 @@ class MedicationOut(BaseModel):
     doses_taken_today: int
     adherence_score: int = 100
 
-    class Config:
-        from_attributes = True
+class Config:
+    from_attributes = True
+
+class ChatMessage(BaseModel):
+    role: str  # "user" or "assistant"
+    content: str
+
+class ChatRequest(BaseModel):
+    message: str
+    history: list[ChatMessage] = []
