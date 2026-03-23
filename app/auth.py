@@ -58,3 +58,15 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     if user is None:
         raise credentials_exception
     return user
+
+def create_reset_token(email: str) -> str:
+    expire = datetime.utcnow() + timedelta(minutes=15)
+    return pyjwt.encode({"sub": email, "exp": expire}, os.getenv("SECRET_KEY"), algorithm=ALGORITHM)
+
+def verify_reset_token(token: str) -> str:
+    try:
+        payload = pyjwt.decode(token, os.getenv("SECRET_KEY"), algorithms=[ALGORITHM])
+        return payload.get("sub")
+    except pyjwt.PyJWTError:
+        return None
+    
