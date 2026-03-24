@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, TIMESTAMP,ForeignKey, Date, DateTime, Float
+from sqlalchemy import JSON, Column, Integer, String, TIMESTAMP,ForeignKey, Date, DateTime, Float
 import datetime
 from sqlalchemy.sql import func
 from app.database import Base
@@ -100,3 +100,13 @@ class MedicationLog(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     
     taken_at = Column(TIMESTAMP, server_default=func.now())
+
+class FitbitCache(Base):
+    __tablename__ = "fitbit_cache"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    date = Column(String, index=True) # Stored as "YYYY-MM-DD"
+    endpoint = Column(String, index=True) # Identifies if it's "activity", "intraday", etc.
+    data = Column(JSON) # Stores the exact payload Fitbit gave us
+    updated_at = Column(DateTime, default=datetime.utcnow)
