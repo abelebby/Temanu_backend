@@ -1,5 +1,5 @@
 from sqlalchemy import JSON, Column, Integer, String, TIMESTAMP,ForeignKey, Date, DateTime, Float
-import datetime
+from datetime import datetime, timezone
 from sqlalchemy.sql import func
 from app.database import Base
 
@@ -106,7 +106,9 @@ class FitbitCache(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
-    date = Column(String, index=True) # Stored as "YYYY-MM-DD"
-    endpoint = Column(String, index=True) # Identifies if it's "activity", "intraday", etc.
-    data = Column(JSON) # Stores the exact payload Fitbit gave us
-    updated_at = Column(DateTime, default=datetime.utcnow)
+
+    date = Column(String(50), index=True) 
+    endpoint = Column(String(100), index=True) 
+    
+    data = Column(JSON) 
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
