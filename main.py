@@ -18,6 +18,7 @@ import smtplib
 from email.message import EmailMessage
 import re 
 from openai import OpenAI
+import copy
 
 # Assuming your database session generator is called SessionLocal
 from app.database import SessionLocal
@@ -228,24 +229,22 @@ def update_user_profile(
     db.refresh(db_user)
     
     return db_user
+
 @app.delete("/users/me")
 def delete_account(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    # 1. Sweep up all health metrics associated with this user
     db.query(models.HealthMetric).filter(models.HealthMetric.user_id == current_user.id).delete()
-
-    # 2. Sweep up all activity metrics
     db.query(models.Activity).filter(models.Activity.user_id == current_user.id).delete()
-
-    # 3. Delete any lingering OTP codes for their email
     db.query(models.OTPCode).filter(models.OTPCode.email == current_user.email).delete()
+    
+    # --- NEW: Delete Fitbit Tokens and Caches ---
+    db.query(models.FitbitToken).filter(models.FitbitToken.user_id == current_user.id).delete()
+    db.query(models.FitbitCache).filter(models.FitbitCache.user_id == current_user.id).delete()
 
-    # 4. --- THE FIX: Delete the user using the CURRENT session! ---
     db.query(models.User).filter(models.User.id == current_user.id).delete()
     db.commit()
-    # ---------------------------------------------------------------
 
     return {"message": "Account and all associated data successfully deleted"}
 
@@ -278,70 +277,39 @@ def link_fitbit_account(
 @app.get("/fitbit/activity/{date}")
 def get_fitbit_activity(
     date: str, 
+    force_refresh: bool = False, # <-- NEW
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    # 1. Look up the token in our new dedicated table
-    fitbit_data = db.query(models.FitbitToken).filter(models.FitbitToken.user_id == current_user.id).first()
-    
-    if not fitbit_data or not fitbit_data.access_token:
-        raise HTTPException(status_code=400, detail="Fitbit account not linked")
-
-    # 2. Fetch the data using their secure database token
     url = f"https://api.fitbit.com/1/user/-/activities/date/{date}.json"
-    headers = {"Authorization": f"Bearer {fitbit_data.access_token}"}
-    response = requests.get(url, headers=headers)
-
-    # 3. Handle expired tokens by wiping the row so they can reconnect
-    if response.status_code == 401:
-        db.delete(fitbit_data)
-        db.commit()
-        raise HTTPException(status_code=401, detail="Fitbit token expired. Please reconnect.")
-        
-    if response.status_code != 200:
-        raise HTTPException(status_code=response.status_code, detail="Fitbit API error")
-
-    return response.json()
+    data = fetch_and_cache_fitbit(db, current_user, "activity", url, date, force_refresh)
+    
+    if not data:
+        raise HTTPException(status_code=400, detail="Fitbit account not linked")
+    return data
 
 @app.get("/fitbit/steps/intraday/{date}")
 def get_fitbit_intraday_steps(
     date: str,
+    force_refresh: bool = False, # <-- NEW
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    # 1. Grab the user's Fitbit token
-    fitbit_data = db.query(models.FitbitToken).filter(models.FitbitToken.user_id == current_user.id).first()
-    if not fitbit_data or not fitbit_data.access_token:
+    url = f"https://api.fitbit.com/1/user/-/activities/steps/date/{date}/1d/15min.json"
+    raw_data = fetch_and_cache_fitbit(db, current_user, "intraday", url, date, force_refresh)
+
+    if not raw_data:
         raise HTTPException(status_code=400, detail="Fitbit account not linked")
 
-    # 2. THE FIX: Ask Fitbit for 15-minute intervals instead of 1hr
-    url = f"https://api.fitbit.com/1/user/-/activities/steps/date/{date}/1d/15min.json"
-    headers = {"Authorization": f"Bearer {fitbit_data.access_token}"}
-    response = requests.get(url, headers=headers)
+    data = copy.deepcopy(raw_data)
 
-    if response.status_code == 401:
-        db.delete(fitbit_data)
-        db.commit()
-        raise HTTPException(status_code=401, detail="Fitbit token expired. Please reconnect.")
-        
-    if response.status_code != 200:
-        raise HTTPException(status_code=response.status_code, detail="Fitbit API error")
-
-    data = response.json()
-
-    # 3. Aggregate the 15-minute chunks into 24 hourly chunks for Flutter!
     if "activities-steps-intraday" in data and "dataset" in data["activities-steps-intraday"]:
         raw_dataset = data["activities-steps-intraday"]["dataset"]
-        
-        # Create a dictionary holding 24 hours, starting at 0 steps
         hourly_data = {f"{i:02d}:00:00": 0 for i in range(24)}
-        
-        # Loop through the 15-minute increments and sum them up by hour
         for item in raw_dataset:
-            hour_key = item["time"][:2] + ":00:00" # Grabs the "14" from "14:15:00"
+            hour_key = item["time"][:2] + ":00:00" 
             hourly_data[hour_key] += int(item["value"])
             
-        # Reformat it back into the array structure Flutter expects
         aggregated_dataset = [{"time": k, "value": v} for k, v in hourly_data.items()]
         data["activities-steps-intraday"]["dataset"] = aggregated_dataset
 
@@ -351,28 +319,66 @@ def get_fitbit_intraday_steps(
 def get_fitbit_timeseries_steps(
     period: str,
     date: str,
+    force_refresh: bool = False, # <-- NEW
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    # 1. Grab the user's Fitbit token
-    fitbit_data = db.query(models.FitbitToken).filter(models.FitbitToken.user_id == current_user.id).first()
-    if not fitbit_data or not fitbit_data.access_token:
-        raise HTTPException(status_code=400, detail="Fitbit account not linked")
-
-    # 2. Hit the TIME SERIES endpoint
     url = f"https://api.fitbit.com/1/user/-/activities/steps/date/{date}/{period}.json"
-    headers = {"Authorization": f"Bearer {fitbit_data.access_token}"}
-    response = requests.get(url, headers=headers)
+    data = fetch_and_cache_fitbit(db, current_user, f"timeseries_{period}", url, date, force_refresh)
 
-    if response.status_code == 401:
-        db.delete(fitbit_data)
-        db.commit()
-        raise HTTPException(status_code=401, detail="Fitbit token expired. Please reconnect.")
+    if not data:
+        raise HTTPException(status_code=400, detail="Fitbit account not linked")
+    return data
+
+@app.get("/insights/weekly")
+def get_weekly_insights(
+    force_refresh: bool = False, # <-- NEW
+    db: Session = Depends(get_db), 
+    current_user: models.User = Depends(get_current_user)
+):
+    today = date.today()
+    seven_days_ago = today - timedelta(days=6)
+
+    # 1. Grab Meals (Same as before)
+    meals = db.query(
+        func.date(models.MealLog.timestamp).label("date"),
+        func.sum(models.MealLog.calories).label("calories"),
+        func.sum(models.MealLog.protein).label("protein"),
+        func.sum(models.MealLog.carbs).label("carbs"),
+        func.sum(models.MealLog.fats).label("fats")
+    ).filter(
+        models.MealLog.user_id == current_user.id,
+        func.date(models.MealLog.timestamp) >= seven_days_ago
+    ).group_by(func.date(models.MealLog.timestamp)).all()
+
+    meal_dict = {
+        str(m.date): {"consumed": m.calories or 0, "protein": m.protein or 0, "carbs": m.carbs or 0, "fats": m.fats or 0} for m in meals
+    }
+
+    # 2. Grab Fitbit Burn Data (Using the new force_refresh flag!)
+    fitbit_dict = {}
+    url = f"https://api.fitbit.com/1/user/-/activities/calories/date/{seven_days_ago}/{today}.json"
+    fb_json = fetch_and_cache_fitbit(db, current_user, "weekly_calories", url, str(today), force_refresh)
+    
+    if fb_json:
+        for item in fb_json.get("activities-calories", []):
+            fitbit_dict[item["dateTime"]] = float(item["value"])
+
+    # 3. Merge them together (Same as before)
+    results = []
+    for i in range(7):
+        current_date = today - timedelta(days=6-i)
+        date_str = str(current_date)
+        day_meals = meal_dict.get(date_str, {"consumed": 0, "protein": 0, "carbs": 0, "fats": 0})
+        day_burned = fitbit_dict.get(date_str, 0)
+
+        results.append({
+            "date": date_str, "day_name": current_date.strftime("%a"),
+            "consumed": day_meals["consumed"], "burned": day_burned,
+            "protein": day_meals["protein"], "carbs": day_meals["carbs"], "fats": day_meals["fats"]
+        })
         
-    if response.status_code != 200:
-        raise HTTPException(status_code=response.status_code, detail="Fitbit API error")
-
-    return response.json()
+    return results
 
 @app.post("/activity", response_model=schemas.ActivityOut)
 def create_activity(
@@ -405,6 +411,57 @@ def get_activity(
     ).all()
 
     return activities
+
+def fetch_and_cache_fitbit(db: Session, current_user: models.User, endpoint: str, url: str, date_str: str, force_refresh: bool = False):
+    today_str = date.today().strftime("%Y-%m-%d")
+
+    # 1. Look for existing cache in the database
+    cache = db.query(models.FitbitCache).filter(
+        models.FitbitCache.user_id == current_user.id,
+        models.FitbitCache.endpoint == endpoint,
+        models.FitbitCache.date == date_str
+    ).first()
+
+    # 2. THE SHIELD LOGIC
+    if cache:
+        # A. If it's a past date, ALWAYS use the cache. Fitbit past data doesn't change.
+        if date_str != today_str:
+            return cache.data
+            
+        # B. If it's today, but the app DID NOT ask for a refresh, use the cache!
+        if date_str == today_str and not force_refresh:
+            return cache.data
+
+    # 3. If it gets here, we MUST hit the API (Either missing data, or force_refresh is True)
+    fitbit_data = db.query(models.FitbitToken).filter(models.FitbitToken.user_id == current_user.id).first()
+
+    if not fitbit_data or not fitbit_data.access_token:
+        if cache: return cache.data 
+        return None 
+
+    headers = {"Authorization": f"Bearer {fitbit_data.access_token}"}
+    response = requests.get(url, headers=headers)
+
+    if response.status_code == 200:
+        data = response.json()
+
+        if cache:
+            cache.data = data
+            cache.updated_at = datetime.utcnow()
+        else:
+            new_cache = models.FitbitCache(user_id=current_user.id, date=date_str, endpoint=endpoint, data=data)
+            db.add(new_cache)
+        db.commit()
+        return data
+
+    elif response.status_code == 401:
+        db.delete(fitbit_data)
+        db.commit()
+        if cache: return cache.data 
+        raise HTTPException(status_code=401, detail="Fitbit token expired. Please reconnect.")
+    else:
+        if cache: return cache.data 
+        raise HTTPException(status_code=response.status_code, detail="Fitbit API error")
 
 # Health APIs
 @app.post("/health", response_model=schemas.HealthMetricOut)
@@ -619,71 +676,6 @@ def get_todays_meals(
     
     return meals
 
-@app.get("/insights/weekly")
-def get_weekly_insights(
-    db: Session = Depends(get_db), 
-    current_user: models.User = Depends(get_current_user)
-):
-    today = date.today()
-    seven_days_ago = today - timedelta(days=6) # Get the last 7 days inclusive
-
-    # 1. Grab 7 days of Meals and group them by date
-    meals = db.query(
-        func.date(models.MealLog.timestamp).label("date"),
-        func.sum(models.MealLog.calories).label("calories"),
-        func.sum(models.MealLog.protein).label("protein"),
-        func.sum(models.MealLog.carbs).label("carbs"),
-        func.sum(models.MealLog.fats).label("fats")
-    ).filter(
-        models.MealLog.user_id == current_user.id,
-        func.date(models.MealLog.timestamp) >= seven_days_ago
-    ).group_by(func.date(models.MealLog.timestamp)).all()
-
-    # Convert to a dictionary for easy lookup: {"2026-03-15": {"calories": 2000...}}
-    meal_dict = {
-        str(m.date): {
-            "consumed": m.calories or 0, 
-            "protein": m.protein or 0, 
-            "carbs": m.carbs or 0, 
-            "fats": m.fats or 0
-        } for m in meals
-    }
-
-    # 2. Grab 7 days of Fitbit Burn data (if linked)
-    fitbit_data = db.query(models.FitbitToken).filter(models.FitbitToken.user_id == current_user.id).first()
-    fitbit_dict = {}
-    
-    if fitbit_data and fitbit_data.access_token:
-        # Use Fitbit's Time Series API to get a whole week at once!
-        url = f"https://api.fitbit.com/1/user/-/activities/calories/date/{seven_days_ago}/{today}.json"
-        headers = {"Authorization": f"Bearer {fitbit_data.access_token}"}
-        response = requests.get(url, headers=headers)
-        
-        if response.status_code == 200:
-            fb_json = response.json()
-            for item in fb_json.get("activities-calories", []):
-                fitbit_dict[item["dateTime"]] = float(item["value"])
-
-    # 3. Merge them together into a perfect 7-day array for Flutter
-    results = []
-    for i in range(7):
-        current_date = today - timedelta(days=6-i)
-        date_str = str(current_date)
-        
-        day_meals = meal_dict.get(date_str, {"consumed": 0, "protein": 0, "carbs": 0, "fats": 0})
-        day_burned = fitbit_dict.get(date_str, 0)
-
-        results.append({
-            "date": date_str,
-            "day_name": current_date.strftime("%a"), # "Mon", "Tue", etc.
-            "consumed": day_meals["consumed"],
-            "burned": day_burned,
-            "protein": day_meals["protein"],
-            "carbs": day_meals["carbs"],
-            "fats": day_meals["fats"]
-        })
-        
-    return results
 
 @app.post("/medications", response_model=schemas.MedicationOut)
 def add_medication(
