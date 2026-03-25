@@ -208,3 +208,76 @@ class MedicalRecordOut(BaseModel):
 
 class LinkDoctorRequest(BaseModel):
     doctor_id: str
+# ===== DOCTOR PORTAL SCHEMAS =====
+
+class DoctorLogin(BaseModel):
+    username: str
+    password: str
+
+class DoctorProfileOut(BaseModel):
+    id: str
+    email: str
+    name: str
+    preferred_name: Optional[str] = None
+    username: Optional[str] = None
+    gender: Optional[str] = None
+    dob: Optional[str] = None
+    education: Optional[str] = None
+    specialisation: Optional[str] = None
+    clinic_name: Optional[str] = None
+    clinic_address: Optional[str] = None
+    messaging_platform: Optional[str] = None
+    platform_link: Optional[str] = None
+    profile_image_url: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+class DoctorProfileUpdate(BaseModel):
+    preferred_name: Optional[str] = None
+    gender: Optional[str] = None
+    dob: Optional[str] = None
+    education: Optional[str] = None
+    specialisation: Optional[str] = None
+    clinic_name: Optional[str] = None
+    clinic_address: Optional[str] = None
+    messaging_platform: Optional[str] = None
+    platform_link: Optional[str] = None
+    profile_image_url: Optional[str] = None
+
+class DoctorPatientOut(BaseModel):
+    id: int
+    name: str
+    preferred_name: str
+    username: str
+    gender: Optional[str] = None
+    dob: Optional[str] = None
+    blood_type: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+class DoctorAppointmentOut(BaseModel):
+    id: int
+    user_id: int
+    patient_name: str
+    patient_preferred_name: str
+    appointment_time: datetime
+    purpose: Optional[str] = None
+    status: str
+
+class DoctorRecordOut(BaseModel):
+    id: int
+    user_id: int
+    patient_name: str
+    file_name: str
+    record_type: Optional[str] = None
+    file_url: str
+    description: Optional[str] = None
+    created_at: datetime
+
+class AppointmentStatusUpdate(BaseModel):
+    status: str  # "Completed" or "Cancelled"
+
+
+    

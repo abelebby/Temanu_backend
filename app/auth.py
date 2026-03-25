@@ -59,6 +59,36 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         raise credentials_exception
     return user
 
+def create_doctor_access_token(data: dict) -> str:
+    """Creates a JWT for a doctor. The 'sub' field should use 'doc_' prefix."""
+    secret = os.getenv("SECRET_KEY")
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    return pyjwt.encode(to_encode, secret, algorithm=ALGORITHM)
+
+def get_current_doctor(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    """Dependency that extracts and validates a doctor from their JWT token."""
+    secret = os.getenv("SECRET_KEY")
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid or expired doctor token",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = pyjwt.decode(token, secret, algorithms=[ALGORITHM])
+        sub: str = payload.get("sub")
+        if sub is None or not sub.startswith("doc_"):
+            raise credentials_exception
+        doctor_id = sub[4:]  # Strip "doc_" prefix
+    except pyjwt.PyJWTError:
+        raise credentials_exception
+
+    doctor = db.query(models.Doctor).filter(models.Doctor.id == doctor_id).first()
+    if doctor is None:
+        raise credentials_exception
+    return doctor
+
 def create_reset_token(email: str) -> str:
     expire = datetime.utcnow() + timedelta(minutes=15)
     return pyjwt.encode({"sub": email, "exp": expire}, os.getenv("SECRET_KEY"), algorithm=ALGORITHM)
@@ -69,4 +99,3 @@ def verify_reset_token(token: str) -> str:
         return payload.get("sub")
     except pyjwt.PyJWTError:
         return None
-    

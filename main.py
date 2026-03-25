@@ -20,6 +20,7 @@ import re
 from openai import OpenAI
 import copy
 from app import doctors
+from app.doctor_portal import doctor_auth_router, doctor_data_router
 from app.database import SessionLocal, engine, get_db
 
 # Assuming your database session generator is called SessionLocal
@@ -43,6 +44,8 @@ mail_config = ConnectionConfig(
 )
 
 app.include_router(doctors.router)
+app.include_router(doctor_auth_router)
+app.include_router(doctor_data_router)
 
 @app.on_event("startup")
 def start_scheduler():
