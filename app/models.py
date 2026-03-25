@@ -1,6 +1,7 @@
-from sqlalchemy import JSON, Column, Integer, String, TIMESTAMP,ForeignKey, Date, DateTime, Float
+from sqlalchemy import JSON, Column, Integer, String, TIMESTAMP, ForeignKey, Date, DateTime, Float, Text
 from datetime import datetime, timezone
 from sqlalchemy.sql import func
+from sqlalchemy.orm import relationship
 from app.database import Base
 
 class User(Base):
@@ -12,12 +13,17 @@ class User(Base):
     preferred_name = Column(String(50), nullable=False)
     username = Column(String(50), unique=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
-    # --- NEW COLUMNS ---
+    
     gender = Column(String(20), nullable=True)
     dob = Column(String(50), nullable=True) 
     blood_type = Column(String(10), nullable=True)
-    # -------------------
+    
     created_at = Column(TIMESTAMP, server_default=func.now())
+
+    appointments = relationship("Appointment", back_populates="user", cascade="all, delete-orphan")
+    medical_records = relationship("MedicalRecord", back_populates="user", cascade="all, delete-orphan")
+    personal_doctors = relationship("PersonalDoctor", back_populates="user", cascade="all, delete-orphan")
+
 
 class Activity(Base):
     __tablename__ = "activity_metrics"
@@ -41,14 +47,13 @@ class HealthMetric(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     
-    # Specific metric columns with proper datatypes for charting
-    blood_glucose = Column(Float, nullable=True)             # e.g., mg/dL
-    heart_rate = Column(Integer, nullable=True)              # e.g., bpm
-    oxygen_saturation = Column(Float, nullable=True)         # e.g., %
-    blood_pressure_systolic = Column(Integer, nullable=True) # e.g., mmHg
-    blood_pressure_diastolic = Column(Integer, nullable=True)# e.g., mmHg
-    calories = Column(Integer, nullable=True)                # e.g., kcal
-    body_weight = Column(Float, nullable=True)               # e.g., kg
+    blood_glucose = Column(Float, nullable=True)             
+    heart_rate = Column(Integer, nullable=True)              
+    oxygen_saturation = Column(Float, nullable=True)         
+    blood_pressure_systolic = Column(Integer, nullable=True) 
+    blood_pressure_diastolic = Column(Integer, nullable=True)
+    calories = Column(Integer, nullable=True)                
+    body_weight = Column(Float, nullable=True)               
     
     timestamp = Column(TIMESTAMP, server_default=func.now())
 
@@ -56,8 +61,6 @@ class FitbitToken(Base):
     __tablename__ = "fitbit_tokens"
 
     id = Column(Integer, primary_key=True, index=True)
-    # The Foreign Key links this token directly to a specific user
-    # unique=True ensures one user can't accidentally save 5 different Fitbit accounts
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
     
     access_token = Column(String(1000), nullable=False)
@@ -87,8 +90,8 @@ class Medication(Base):
     dosage = Column(String(50), nullable=True) 
     inventory = Column(Float, default=0.0)    
     
-    unit = Column(String(50), default="pills") # e.g., ml, puffs, drops
-    times = Column(String(255), nullable=True) # e.g., "08:00 AM,08:00 PM"
+    unit = Column(String(50), default="pills") 
+    times = Column(String(255), nullable=True) 
     
     created_at = Column(TIMESTAMP, server_default=func.now())
 
@@ -112,3 +115,92 @@ class FitbitCache(Base):
     
     data = Column(JSON) 
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+# ==========================================
+# DOCTORS TABLE
+# ==========================================
+class Doctor(Base):
+    __tablename__ = "doctors"
+
+    # --- THE FIX: Added lengths to all String columns for MySQL ---
+    id = Column(String(50), primary_key=True, index=True) 
+    email = Column(String(100), unique=True, index=True, nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    
+    name = Column(String(100), nullable=False)
+    preferred_name = Column(String(50))
+    username = Column(String(50), unique=True, index=True)
+    gender = Column(String(20))
+    dob = Column(String(50)) 
+    
+    education = Column(String(255))
+    specialisation = Column(String(100))
+    clinic_name = Column(String(150))
+    clinic_address = Column(Text) # Text doesn't need a length
+    
+    messaging_platform = Column(String(50)) 
+    platform_link = Column(String(255))
+    profile_image_url = Column(String(500))
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    appointments = relationship("Appointment", back_populates="doctor", cascade="all, delete-orphan")
+    medical_records = relationship("MedicalRecord", back_populates="doctor", cascade="all, delete-orphan")
+    patients = relationship("PersonalDoctor", back_populates="doctor", cascade="all, delete-orphan")
+
+
+# ==========================================
+# APPOINTMENTS TABLE
+# ==========================================
+class Appointment(Base):
+    __tablename__ = "appointments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    doctor_id = Column(String(50), ForeignKey("doctors.id"), nullable=False) # Must match Doctor ID length
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False) 
+    
+    appointment_time = Column(DateTime(timezone=True), nullable=False)
+    purpose = Column(Text)
+    status = Column(String(50), default="Upcoming") 
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    doctor = relationship("Doctor", back_populates="appointments")
+    user = relationship("User", back_populates="appointments") 
+
+
+# ==========================================
+# MEDICAL RECORDS TABLE
+# ==========================================
+class MedicalRecord(Base):
+    __tablename__ = "medical_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    doctor_id = Column(String(50), ForeignKey("doctors.id"), nullable=False) # Must match Doctor ID length
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    
+    file_name = Column(String(255), nullable=False)
+    record_type = Column(String(100)) 
+    file_url = Column(String(1000), nullable=False) 
+    description = Column(Text)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    doctor = relationship("Doctor", back_populates="medical_records")
+    user = relationship("User", back_populates="medical_records")
+
+
+# ==========================================
+# PERSONAL DOCTORS (JUNCTION TABLE)
+# ==========================================
+class PersonalDoctor(Base):
+    __tablename__ = "personal_doctors"
+
+    user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    doctor_id = Column(String(50), ForeignKey("doctors.id"), primary_key=True) # Must match Doctor ID length
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    doctor = relationship("Doctor", back_populates="patients")
+    user = relationship("User", back_populates="personal_doctors")

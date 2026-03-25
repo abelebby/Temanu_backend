@@ -19,6 +19,8 @@ from email.message import EmailMessage
 import re 
 from openai import OpenAI
 import copy
+from app import doctors
+from app.database import SessionLocal, engine, get_db
 
 # Assuming your database session generator is called SessionLocal
 from app.database import SessionLocal
@@ -40,6 +42,8 @@ mail_config = ConnectionConfig(
     USE_CREDENTIALS=True
 )
 
+app.include_router(doctors.router)
+
 @app.on_event("startup")
 def start_scheduler():
     scheduler = BackgroundScheduler()
@@ -55,13 +59,6 @@ app.add_middleware(
     allow_methods=["*"],  # Allows POST, GET, OPTIONS, etc.
     allow_headers=["*"],  # Allows all headers (like your Authorization JWT)
 )
-
-def get_db():
-    database = SessionLocal()
-    try:
-        yield database
-    finally:
-        database.close()
 
 # ==========================================
 # NEW: Global Password Validator

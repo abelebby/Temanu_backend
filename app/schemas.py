@@ -1,8 +1,8 @@
 from pydantic import BaseModel, EmailStr
 from datetime import date
 from datetime import datetime
-from typing import Optional
-from typing import Optional
+from typing import List, Optional
+
 
 class UserCreate(BaseModel):
     email: EmailStr
@@ -155,3 +155,53 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     history: list[ChatMessage] = []
+
+# --- DOCTOR SCHEMAS ---
+class DoctorOut(BaseModel):
+    id: str
+    name: str
+    specialisation: Optional[str] = None
+    qualifications: Optional[str] = None  # Maps to 'education' in DB
+    clinic_name: Optional[str] = None
+    messaging_platform: Optional[str] = None
+    platform_link: Optional[str] = None
+    profile_image_url: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+# --- APPOINTMENT SCHEMAS ---
+class AppointmentCreate(BaseModel):
+    doctor_id: str
+    appointment_time: datetime
+    purpose: str
+
+class AppointmentOut(BaseModel):
+    id: int
+    doctor_id: str
+    appointment_time: datetime
+    purpose: str
+    status: str
+    doctor: DoctorOut # Includes the doctor's info in the response!
+
+    class Config:
+        from_attributes = True
+
+# --- MEDICAL RECORD SCHEMAS ---
+class MedicalRecordCreate(BaseModel):
+    doctor_id: str
+    file_name: str
+    record_type: str
+    file_url: str
+    description: Optional[str] = None
+
+class MedicalRecordOut(BaseModel):
+    id: int
+    doctor_id: str
+    file_name: str
+    record_type: str
+    file_url: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
