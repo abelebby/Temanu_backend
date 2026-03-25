@@ -108,3 +108,53 @@ def save_medical_record(record: schemas.MedicalRecordCreate, db: Session = Depen
     db.refresh(new_record)
     
     return new_record
+
+# ==========================================
+# 6. SEARCH DOCTORS DIRECTORY
+# ==========================================
+@router.get("/search", response_model=List[schemas.DoctorOut])
+def search_doctors(
+    q: str = "", 
+    db: Session = Depends(get_db), 
+    current_user: models.User = Depends(get_current_user)
+):
+    """Searches the global database for doctors by name, specialty, or clinic."""
+    search_term = f"%{q}%"
+    
+    # Searches across name, specialisation, and clinic
+    doctors = db.query(models.Doctor).filter(
+        (models.Doctor.name.ilike(search_term)) | 
+        (models.Doctor.specialisation.ilike(search_term)) |
+        (models.Doctor.clinic_name.ilike(search_term))
+    ).all()
+    
+    for doc in doctors:
+        doc.qualifications = doc.education
+        
+    return doctors
+
+# ==========================================
+# 7. LINK DOCTOR TO USER
+# ==========================================
+@router.post("/link")
+def link_doctor(
+    req: schemas.LinkDoctorRequest, 
+    db: Session = Depends(get_db), 
+    current_user: models.User = Depends(get_current_user)
+):
+    """Adds a doctor to the user's personal Care Team."""
+    # Check if they are already linked
+    existing_link = db.query(models.PersonalDoctor).filter(
+        models.PersonalDoctor.user_id == current_user.id,
+        models.PersonalDoctor.doctor_id == req.doctor_id
+    ).first()
+    
+    if not existing_link:
+        new_link = models.PersonalDoctor(
+            user_id=current_user.id, 
+            doctor_id=req.doctor_id
+        )
+        db.add(new_link)
+        db.commit()
+        
+    return {"message": "Doctor linked successfully"}

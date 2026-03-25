@@ -205,3 +205,6 @@ class MedicalRecordOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+class LinkDoctorRequest(BaseModel):
+    doctor_id: str
