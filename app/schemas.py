@@ -206,6 +206,8 @@ class MedicalRecordOut(BaseModel):
     class Config:
         from_attributes = True
 
+class LinkDoctorRequest(BaseModel):
+    doctor_id: str
 # ===== DOCTOR PORTAL SCHEMAS =====
 
 class DoctorLogin(BaseModel):

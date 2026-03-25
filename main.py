@@ -770,7 +770,6 @@ def take_medication(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    # 1. Find the pill
     med = db.query(models.Medication).filter(
         models.Medication.id == med_id, 
         models.Medication.user_id == current_user.id
@@ -779,8 +778,11 @@ def take_medication(
     if not med:
         raise HTTPException(status_code=404, detail="Medication not found")
 
-    # 2. Create the log stamp
-    new_log = models.MedicationLog(medication_id=med.id, user_id=current_user.id)
+    new_log = models.MedicationLog(
+        medication_id=med.id, 
+        user_id=current_user.id,
+        taken_at=datetime.now() 
+    )
     db.add(new_log)
     
     # 3. Safely figure out how much to subtract
