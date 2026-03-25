@@ -9,7 +9,7 @@ from fastapi_mail import FastMail, MessageSchema, ConnectionConfig
 import os
 from dotenv import load_dotenv
 import random
-from datetime import date, timedelta, datetime
+from datetime import date, timedelta, datetime, timezone
 from fastapi.middleware.cors import CORSMiddleware
 import requests
 from fastapi import Header
@@ -413,8 +413,7 @@ def get_activity(
     return activities
 
 def fetch_and_cache_fitbit(db: Session, current_user: models.User, endpoint: str, url: str, date_str: str, force_refresh: bool = False):
-    today_str = date.today().strftime("%Y-%m-%d")
-
+    
     # 1. Look for existing cache in the database
     cache = db.query(models.FitbitCache).filter(
         models.FitbitCache.user_id == current_user.id,
@@ -422,14 +421,11 @@ def fetch_and_cache_fitbit(db: Session, current_user: models.User, endpoint: str
         models.FitbitCache.date == date_str
     ).first()
 
-    # 2. THE SHIELD LOGIC
+    # 2. THE TRUE SHIELD LOGIC
     if cache:
-        # A. If it's a past date, ALWAYS use the cache. Fitbit past data doesn't change.
-        if date_str != today_str:
-            return cache.data
-            
-        # B. If it's today, but the app DID NOT ask for a refresh, use the cache!
-        if date_str == today_str and not force_refresh:
+        # We completely removed the date checking. 
+        # If Flutter DOES NOT ask for a refresh, use the cache instantly!
+        if not force_refresh:
             return cache.data
 
     # 3. If it gets here, we MUST hit the API (Either missing data, or force_refresh is True)
@@ -447,7 +443,7 @@ def fetch_and_cache_fitbit(db: Session, current_user: models.User, endpoint: str
 
         if cache:
             cache.data = data
-            cache.updated_at = datetime.utcnow()
+            cache.updated_at = datetime.now(timezone.utc)
         else:
             new_cache = models.FitbitCache(user_id=current_user.id, date=date_str, endpoint=endpoint, data=data)
             db.add(new_cache)
@@ -1007,7 +1003,7 @@ def chat(
     ).group_by(func.date(models.MealLog.timestamp)).all()
 
     # ── Build system prompt ──
-    system_prompt = f"""You are TemanU, a personal heart health assistant for elderly patients with heart conditions.
+    system_prompt = f"""You are TemanU, a personal health assistant for patients.
 
 PATIENT PROFILE:
 - Name: {current_user.preferred_name}
@@ -1033,7 +1029,7 @@ CURRENT DATA (Today - {today}):
 - Meal days logged: {len(meal_history)} out of last 30 days
 
 STRICT RULES YOU MUST FOLLOW:
-1. Only discuss topics related to heart health, medications, diet, activity and the patient's data
+1. Only discuss topics related to health, medications, diet, activity and the patient's data
 2. Always use simple, clear language suitable for elderly patients
 3. Never diagnose conditions — only inform and suggest
 4. For any chest pain, severe dizziness, or emergency symptoms always say "Call emergency services immediately"
