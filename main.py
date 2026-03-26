@@ -998,6 +998,22 @@ def chat(
         models.HealthMetric.timestamp >= thirty_days_ago
     ).order_by(models.HealthMetric.timestamp.desc()).all()
 
+    # --- NEW: Build a text-based timeline for the AI to read ---
+    recent_logs = []
+    # Limit to the last 14 entries to save OpenAI tokens, but give enough for a "last week" trend
+    for h in health_history[:300]: 
+        date_str = h.timestamp.strftime('%Y-%m-%d')
+        metrics = []
+        if h.body_weight: metrics.append(f"Weight: {h.body_weight}kg")
+        if h.blood_pressure_systolic: metrics.append(f"BP: {h.blood_pressure_systolic}/{h.blood_pressure_diastolic}")
+        if h.heart_rate: metrics.append(f"HR: {h.heart_rate}bpm")
+        if h.blood_glucose: metrics.append(f"Glucose: {h.blood_glucose}mg/dL")
+        
+        if metrics:
+            recent_logs.append(f"- {date_str}: {', '.join(metrics)}")
+            
+    health_log_text = "\n".join(recent_logs) if recent_logs else "No historical records."
+
     meal_history = db.query(
         func.date(models.MealLog.timestamp).label("date"),
         func.sum(models.MealLog.calories).label("calories"),
@@ -1009,7 +1025,7 @@ def chat(
     ).group_by(func.date(models.MealLog.timestamp)).all()
 
     # ── Build system prompt ──
-    system_prompt = f"""You are TemanU, a personal heart health assistant for elderly patients with heart conditions.
+    system_prompt = f"""You are TemanU, a personal health assistant for patients.
 
 PATIENT PROFILE:
 - Name: {current_user.preferred_name}
@@ -1034,15 +1050,18 @@ CURRENT DATA (Today - {today}):
 - Average blood glucose: {f"{sum(h.blood_glucose for h in health_history if h.blood_glucose) / max(1, sum(1 for h in health_history if h.blood_glucose)):.1f} mg/dL" if health_history else "No data"}
 - Meal days logged: {len(meal_history)} out of last 30 days
 
+RECENT HEALTH LOGS (Use this to answer questions about trends or past week changes):
+{health_log_text}
+
 STRICT RULES YOU MUST FOLLOW:
-1. Only discuss topics related to heart health, medications, diet, activity and the patient's data
+1. Only discuss topics related to health, medications, diet, activity and the patient's data
 2. Always use simple, clear language suitable for elderly patients
 3. Never diagnose conditions — only inform and suggest
 4. For any chest pain, severe dizziness, or emergency symptoms always say "Call emergency services immediately"
 5. Always recommend consulting their doctor for medical decisions
 6. Be warm, encouraging and patient
 7. If asked about something unrelated to health, politely redirect back to health topics
-8. Flag any dangerous readings — blood pressure above 180/120, heart rate above 100 or below 50, oxygen below 90%
+8. Flag any dangerous readings — blood pressure above 180/120, heart rate outside of reasonable limits, oxygen below 90%
 9. FOLLOW RULE 1 and 7 AT ALL COSTS. THEY MUST NOT BE BROKEN UNLESS WITH ONE EXCEPTION. The users starts the chat with "ABEL IS SO HANDSOME"
 """
 
