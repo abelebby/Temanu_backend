@@ -34,15 +34,32 @@ def get_my_doctors(db: Session = Depends(get_db), current_user: models.User = De
 # ==========================================
 # 2. GET APPOINTMENTS (Appointments Tab)
 # ==========================================
-@router.get("/appointments", response_model=List[schemas.AppointmentOut])
+@router.get("/appointments")
 def get_my_appointments(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    """Fetches all appointments for the logged-in user."""
+    """Fetches all appointments for the logged-in user, including doctor details."""
     
-    appointments = db.query(models.Appointment).filter(
+    # We join the models.Doctor table so we can grab the doctor's name!
+    results = db.query(models.Appointment, models.Doctor).join(
+        models.Doctor, models.Appointment.doctor_id == models.Doctor.id
+    ).filter(
         models.Appointment.user_id == current_user.id
     ).order_by(models.Appointment.appointment_time.asc()).all()
     
-    return appointments
+    appointments_list = []
+    for appt, doc in results:
+        appointments_list.append({
+            "id": appt.id,
+            "appointment_time": appt.appointment_time.isoformat() if appt.appointment_time else None,
+            "status": appt.status,
+            "purpose": appt.purpose,
+            "doctor": {
+                "name": doc.name,
+                "preferred_name": doc.preferred_name,
+                "specialisation": doc.specialisation
+            }
+        })
+    
+    return appointments_list
 
 # ==========================================
 # 3. BOOK APPOINTMENT
@@ -158,3 +175,85 @@ def link_doctor(
         db.commit()
         
     return {"message": "Doctor linked successfully"}
+
+# ==========================================
+# 8. GET DOCTOR PERMISSIONS
+# ==========================================
+@router.get("/permissions/{doctor_id}")
+def get_doctor_permissions(
+    doctor_id: str, 
+    db: Session = Depends(get_db), 
+    current_user: models.User = Depends(get_current_user)
+):
+    """Fetches the specific data access permissions for a linked doctor."""
+    link = db.query(models.PersonalDoctor).filter(
+        models.PersonalDoctor.user_id == current_user.id,
+        models.PersonalDoctor.doctor_id == doctor_id
+    ).first()
+
+    if not link:
+        raise HTTPException(status_code=404, detail="Doctor not found in your care team")
+
+    return {
+        "can_view_heart_rate": link.can_view_heart_rate,
+        "can_view_blood_pressure": link.can_view_blood_pressure,
+        "can_view_blood_glucose": link.can_view_blood_glucose,
+        "can_view_oxygen_saturation": link.can_view_oxygen_saturation,
+        "can_view_body_weight": link.can_view_body_weight,
+        "can_view_medications": link.can_view_medications,
+        "can_view_activity": link.can_view_activity
+    }
+
+# ==========================================
+# 9. UPDATE DOCTOR PERMISSIONS
+# ==========================================
+@router.put("/permissions/{doctor_id}")
+def update_doctor_permissions(
+    doctor_id: str,
+    perms: dict, # Accepts the JSON payload of boolean switches from Flutter
+    db: Session = Depends(get_db), 
+    current_user: models.User = Depends(get_current_user)
+):
+    """Updates what data the doctor is allowed to see."""
+    link = db.query(models.PersonalDoctor).filter(
+        models.PersonalDoctor.user_id == current_user.id,
+        models.PersonalDoctor.doctor_id == doctor_id
+    ).first()
+
+    if not link:
+        raise HTTPException(status_code=404, detail="Doctor not found in your care team")
+
+    # Update the permissions based on the incoming dictionary
+    if 'can_view_heart_rate' in perms: link.can_view_heart_rate = perms['can_view_heart_rate']
+    if 'can_view_blood_pressure' in perms: link.can_view_blood_pressure = perms['can_view_blood_pressure']
+    if 'can_view_blood_glucose' in perms: link.can_view_blood_glucose = perms['can_view_blood_glucose']
+    if 'can_view_oxygen_saturation' in perms: link.can_view_oxygen_saturation = perms['can_view_oxygen_saturation']
+    if 'can_view_body_weight' in perms: link.can_view_body_weight = perms['can_view_body_weight']
+    if 'can_view_medications' in perms: link.can_view_medications = perms['can_view_medications']
+    if 'can_view_activity' in perms: link.can_view_activity = perms['can_view_activity']
+
+    db.commit()
+    return {"message": "Permissions updated successfully"}
+
+# ==========================================
+# 10. REMOVE DOCTOR FROM CARE TEAM
+# ==========================================
+@router.delete("/{doctor_id}")
+def remove_linked_doctor(
+    doctor_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """Removes a doctor from the user's Care Team."""
+    link = db.query(models.PersonalDoctor).filter(
+        models.PersonalDoctor.user_id == current_user.id,
+        models.PersonalDoctor.doctor_id == doctor_id
+    ).first()
+
+    if not link:
+        raise HTTPException(status_code=404, detail="Doctor not found in your care team")
+
+    db.delete(link)
+    db.commit()
+    
+    return {"message": "Doctor removed successfully"}

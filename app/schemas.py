@@ -278,3 +278,8 @@ class DoctorRecordOut(BaseModel):
 
 class AppointmentStatusUpdate(BaseModel):
     status: str  # "Completed" or "Cancelled"
+
+class DoctorPortalAppointmentCreate(BaseModel):
+    user_id: int            
+    appointment_time: datetime
+    purpose: str

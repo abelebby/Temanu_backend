@@ -1,4 +1,4 @@
-from sqlalchemy import JSON, Column, Integer, String, TIMESTAMP, ForeignKey, Date, DateTime, Float, Text
+from sqlalchemy import JSON, Column, Integer, String, TIMESTAMP, ForeignKey, Date, DateTime, Float, Text, Boolean
 from datetime import datetime, timezone
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
@@ -198,7 +198,16 @@ class PersonalDoctor(Base):
     __tablename__ = "personal_doctors"
 
     user_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
-    doctor_id = Column(String(50), ForeignKey("doctors.id"), primary_key=True) # Must match Doctor ID length
+    doctor_id = Column(String(50), ForeignKey("doctors.id"), primary_key=True) 
+    
+    # --- NEW: Permission Variables ---
+    can_view_heart_rate = Column(Boolean, default=True)
+    can_view_blood_pressure = Column(Boolean, default=True)
+    can_view_blood_glucose = Column(Boolean, default=True)
+    can_view_oxygen_saturation = Column(Boolean, default=True)
+    can_view_body_weight = Column(Boolean, default=True)
+    can_view_medications = Column(Boolean, default=True)
+    can_view_activity = Column(Boolean, default=True)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

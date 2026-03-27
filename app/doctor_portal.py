@@ -249,9 +249,38 @@ def update_appointment_status(
 
     return {"message": f"Appointment marked as {update.status}"}
 
+# ==========================================
+# 9. CREATE APPOINTMENT 
+# ==========================================
+@doctor_data_router.post("/appointments")
+def create_patient_appointment(
+    appt: schemas.DoctorPortalAppointmentCreate, # We will define this below!
+    db: Session = Depends(get_db),
+    current_doctor: models.Doctor = Depends(get_current_doctor) # Your doctor auth dependency
+):
+    """Allows a doctor to schedule a new appointment with a linked patient."""
+    
+    # Optional: Verify the patient actually exists
+    patient = db.query(models.User).filter(models.User.id == appt.user_id).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    new_appt = models.Appointment(
+        user_id=appt.user_id,             # The patient receiving the appointment
+        doctor_id=current_doctor.id,      # The doctor making the appointment
+        appointment_time=appt.appointment_time,
+        purpose=appt.purpose,
+        status="Upcoming"
+    )
+    
+    db.add(new_appt)
+    db.commit()
+    db.refresh(new_appt)
+    
+    return new_appt
 
 # ==========================================
-# 9. GET MEDICAL RECORDS (filterable by patient)
+# 10. GET MEDICAL RECORDS (filterable by patient)
 # ==========================================
 @doctor_data_router.get("/records")
 def get_doctor_records(
