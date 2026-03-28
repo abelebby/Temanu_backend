@@ -5,11 +5,25 @@ from datetime import datetime
 from app.database import get_db
 from app import models, schemas
 from app.auth import get_current_user 
+import boto3
+from botocore.client import Config
+import os
+import uuid
 
 router = APIRouter(
     prefix="/care-team",
     tags=["Care Team & Doctors"]
 )
+
+s3_client = boto3.client(
+    's3',
+    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+    region_name=os.getenv("AWS_REGION"),
+    endpoint_url=f"https://s3.{os.getenv('AWS_REGION')}.amazonaws.com",
+    config=Config(signature_version='s3v4')
+)
+BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
 
 # ==========================================
 # 1. GET LINKED DOCTORS (My Doctors Page)
@@ -257,3 +271,66 @@ def remove_linked_doctor(
     db.commit()
     
     return {"message": "Doctor removed successfully"}
+
+# ==========================================
+# 11. GENERATE UPLOAD URL (For Patients)
+# ==========================================
+@router.get("/records/upload-url")
+def get_upload_url(
+    file_name: str, 
+    file_type: str, 
+    db: Session = Depends(get_db), 
+    current_user: models.User = Depends(get_current_user)
+):
+    """Generates a secure 5-minute URL for the patient app to upload a file to S3."""
+    # Create a unique file path: e.g., patients/42/uuid-bloodtest.pdf
+    unique_filename = f"patients/{current_user.id}/{uuid.uuid4()}_{file_name}"
+    
+    try:
+        presigned_url = s3_client.generate_presigned_url(
+            'put_object',
+            Params={
+                'Bucket': BUCKET_NAME,
+                'Key': unique_filename,
+                'ContentType': file_type
+            },
+            ExpiresIn=300 # Valid for 5 minutes
+        )
+        
+        return {
+            "upload_url": presigned_url,
+            "file_key": unique_filename # We will save this in the 'file_url' column later
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Could not generate upload URL")
+
+# ==========================================
+# 12. GENERATE VIEW/DOWNLOAD URL
+# ==========================================
+@router.get("/records/{record_id}/download-url")
+def get_download_url(
+    record_id: int, 
+    db: Session = Depends(get_db), 
+    current_user: models.User = Depends(get_current_user)
+):
+    """Generates a temporary URL to view a private file."""
+    record = db.query(models.MedicalRecord).filter(
+        models.MedicalRecord.id == record_id,
+        models.MedicalRecord.user_id == current_user.id # Security check!
+    ).first()
+    
+    if not record:
+        raise HTTPException(status_code=404, detail="Record not found")
+
+    try:
+        presigned_url = s3_client.generate_presigned_url(
+            'get_object',
+            Params={
+                'Bucket': BUCKET_NAME,
+                'Key': record.file_url # We saved the unique key here during upload
+            },
+            ExpiresIn=3600 # Valid for 1 hour
+        )
+        return {"download_url": presigned_url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Could not generate download URL")

@@ -1,3 +1,8 @@
+import boto3
+from pydantic import BaseModel
+from botocore.client import Config
+import os
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -6,6 +11,17 @@ from datetime import date, timedelta
 from app.database import get_db
 from app import models, schemas
 from app.auth import verify_password, create_doctor_access_token, get_current_doctor
+
+# Initialize S3 Client
+s3_client = boto3.client(
+    's3',
+    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+    region_name=os.getenv("AWS_REGION"),
+    endpoint_url=f"https://s3.{os.getenv('AWS_REGION')}.amazonaws.com", 
+    config=Config(signature_version='s3v4') 
+)
+BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
 
 # ==========================================
 # DOCTOR PORTAL ROUTER
@@ -313,3 +329,123 @@ def get_doctor_records(
         })
 
     return results
+
+# ==========================================
+# 10.5 SAVE MEDICAL RECORD (For Doctors)
+# ==========================================
+
+# Create a dedicated schema so we don't clash with the patient schemas
+class DoctorRecordCreate(BaseModel):
+    user_id: int
+    file_name: str
+    record_type: str
+    file_url: str
+    description: Optional[str] = None
+
+@doctor_data_router.post("/records")
+def save_doctor_medical_record(
+    record_data: DoctorRecordCreate,
+    db: Session = Depends(get_db),
+    current_doctor: models.Doctor = Depends(get_current_doctor)
+):
+    """Saves the metadata for a document uploaded by a doctor directly to a patient's vault."""
+    
+    # 1. Security Check: Ensure this patient is actually linked to this doctor!
+    link = db.query(models.PersonalDoctor).filter(
+        models.PersonalDoctor.doctor_id == current_doctor.id,
+        models.PersonalDoctor.user_id == record_data.user_id
+    ).first()
+    
+    if not link:
+        raise HTTPException(status_code=403, detail="Patient is not in your care team")
+        
+    # 2. Save the record
+    new_record = models.MedicalRecord(
+        user_id=record_data.user_id,
+        doctor_id=current_doctor.id,
+        file_name=record_data.file_name,
+        record_type=record_data.record_type,
+        file_url=record_data.file_url,  # This holds the AWS S3 Key
+        description=record_data.description
+    )
+    
+    db.add(new_record)
+    db.commit()
+    db.refresh(new_record)
+    
+    return new_record
+
+# ==========================================
+# 11. GENERATE UPLOAD URL (For Doctors)
+# ==========================================
+@doctor_data_router.get("/records/upload-url")
+def get_doctor_upload_url(
+    patient_id: int, # <-- The doctor must specify WHICH patient this file is for
+    file_name: str, 
+    file_type: str, 
+    db: Session = Depends(get_db), 
+    current_doctor: models.Doctor = Depends(get_current_doctor)
+):
+    """Generates a secure 5-minute URL for the doctor to upload a patient file to S3."""
+    
+    # 1. Verify the doctor is allowed to access this patient
+    link = db.query(models.PersonalDoctor).filter(
+        models.PersonalDoctor.doctor_id == current_doctor.id,
+        models.PersonalDoctor.user_id == patient_id
+    ).first()
+    
+    if not link:
+        raise HTTPException(status_code=403, detail="Patient is not in your care team")
+
+    # 2. Create the unique file path (Save it in the patient's folder!)
+    unique_filename = f"patients/{patient_id}/{uuid.uuid4()}_{file_name}"
+    
+    try:
+        presigned_url = s3_client.generate_presigned_url(
+            'put_object',
+            Params={
+                'Bucket': BUCKET_NAME,
+                'Key': unique_filename,
+                'ContentType': file_type
+            },
+            ExpiresIn=300 # Valid for 5 minutes
+        )
+        
+        return {
+            "upload_url": presigned_url,
+            "file_key": unique_filename # Flutter will save this in the database
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Could not generate upload URL")
+
+# ==========================================
+# 12. GENERATE VIEW/DOWNLOAD URL (For Doctors)
+# ==========================================
+@doctor_data_router.get("/records/{record_id}/download-url")
+def get_doctor_download_url(
+    record_id: int, 
+    db: Session = Depends(get_db), 
+    current_doctor: models.Doctor = Depends(get_current_doctor)
+):
+    """Generates a temporary URL for a doctor to view a private file."""
+    
+    record = db.query(models.MedicalRecord).filter(
+        models.MedicalRecord.id == record_id,
+        models.MedicalRecord.doctor_id == current_doctor.id # Security check!
+    ).first()
+    
+    if not record:
+        raise HTTPException(status_code=404, detail="Record not found")
+
+    try:
+        presigned_url = s3_client.generate_presigned_url(
+            'get_object',
+            Params={
+                'Bucket': BUCKET_NAME,
+                'Key': record.file_url 
+            },
+            ExpiresIn=3600 # Valid for 1 hour
+        )
+        return {"download_url": presigned_url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Could not generate download URL")
