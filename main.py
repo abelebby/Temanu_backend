@@ -1072,14 +1072,34 @@ STRICT RULES YOU MUST FOLLOW:
     for msg in request.history:
         messages.append({"role": msg.role, "content": msg.content})
     
-    # Add current message
-    messages.append({"role": "user", "content": request.message})
+    # --- NEW: Add current message with optional Base64 Image ---
+    if hasattr(request, 'image') and request.image:
+        # OpenAI requires a list format when sending images
+        user_content = []
+        
+        # Add the text if the user typed something, otherwise provide a default prompt
+        if request.message.strip():
+            user_content.append({"type": "text", "text": request.message})
+        else:
+            user_content.append({"type": "text", "text": "Please analyze this image."})
+            
+        # Attach the base64 image (Flutter sends the raw base64, so we add the data URI prefix)
+        user_content.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{request.image}"
+            }
+        })
+        messages.append({"role": "user", "content": user_content})
+    else:
+        # Standard text-only message
+        messages.append({"role": "user", "content": request.message})
 
     # ── Call OpenAI ──
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     
     response = client.chat.completions.create(
-        model="gpt-4o-mini",  # cheap and fast, good for this use case
+        model="gpt-4o-mini",  # Native multimodal support!
         messages=messages,
         max_tokens=500,
         temperature=0.7

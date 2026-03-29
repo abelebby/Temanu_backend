@@ -527,3 +527,170 @@ def get_doctor_download_url(
         return {"download_url": presigned_url}
     except Exception as e:
         raise HTTPException(status_code=500, detail="Could not generate download URL")
+    
+# ==========================================
+# 13. SEARCH PATIENTS (For Adding)
+# ==========================================
+@doctor_data_router.get("/search-patient")
+def search_patients(
+    query: str,
+    db: Session = Depends(get_db),
+    current_doctor: models.Doctor = Depends(get_current_doctor)
+):
+    """Searches for users by name or username to add to care team."""
+    search_term = f"%{query}%"
+    
+    users = db.query(models.User).filter(
+        (models.User.name.ilike(search_term)) |
+        (models.User.preferred_name.ilike(search_term)) |
+        (models.User.username.ilike(search_term))
+    ).limit(20).all()
+
+    results = []
+    for u in users:
+        # Check if they are already linked so the UI can disable the "Add" button
+        is_linked = db.query(models.PersonalDoctor).filter(
+            models.PersonalDoctor.doctor_id == current_doctor.id,
+            models.PersonalDoctor.user_id == u.id
+        ).first() is not None
+
+        results.append({
+            "id": u.id,
+            "name": u.name,
+            "preferred_name": u.preferred_name,
+            "username": u.username,
+            "gender": u.gender,
+            "blood_type": u.blood_type,
+            "is_linked": is_linked
+        })
+
+    return results
+
+# ==========================================
+# 14. SEND CARE TEAM REQUEST (Add Patient)
+# ==========================================
+@doctor_data_router.post("/add-patient/{user_id}")
+def add_patient_request(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_doctor: models.Doctor = Depends(get_current_doctor)
+):
+    """Sends a request to the patient. The patient must approve it in their app."""
+    # 1. Check if patient exists
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    # 2. Check if already linked
+    existing_link = db.query(models.PersonalDoctor).filter(
+        models.PersonalDoctor.doctor_id == current_doctor.id,
+        models.PersonalDoctor.user_id == user_id
+    ).first()
+    if existing_link:
+        raise HTTPException(status_code=400, detail="Patient is already in your care team")
+
+    # 3. Check if a request is already pending
+    # NOTE: Ensure 'CareTeamRequest' matches your actual class name in models.py
+    existing_req = db.query(models.CareTeamRequest).filter(
+        models.CareTeamRequest.doctor_id == current_doctor.id,
+        models.CareTeamRequest.user_id == user_id,
+        models.CareTeamRequest.status == "Pending"
+    ).first()
+    
+    if existing_req:
+        raise HTTPException(status_code=400, detail="Request already sent and is awaiting patient approval.")
+
+    # 4. Create the new pending request
+    new_request = models.CareTeamRequest(
+        doctor_id=current_doctor.id,
+        user_id=user_id,
+        status="Pending"
+    )
+    
+    db.add(new_request)
+    db.commit()
+    
+    return {"message": "Request sent to patient successfully"}
+
+# ==========================================
+# 15. GET DOCTOR'S PENDING REQUESTS
+# ==========================================
+@doctor_data_router.get("/pending-requests")
+def get_doctor_pending_requests(
+    db: Session = Depends(get_db),
+    current_doctor: models.Doctor = Depends(get_current_doctor)
+):
+    """Gets all requests sent by this doctor that are still pending patient approval."""
+    # NOTE: Ensure 'CareTeamRequest' matches your actual class name in models.py
+    requests = db.query(models.CareTeamRequest).filter(
+        models.CareTeamRequest.doctor_id == current_doctor.id,
+        models.CareTeamRequest.status == "Pending"
+    ).all()
+
+    results = []
+    for req in requests:
+        user = db.query(models.User).filter(models.User.id == req.user_id).first()
+        if user:
+            results.append({
+                "id": req.id,
+                "user_id": user.id,
+                "patient_name": user.preferred_name or user.name,
+                "status": req.status
+            })
+
+    return results
+
+# ==========================================
+# 16. REMOVE PATIENT FROM CARE TEAM
+# ==========================================
+@doctor_data_router.delete("/remove-patient/{user_id}")
+def remove_patient_from_care_team(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_doctor: models.Doctor = Depends(get_current_doctor)
+):
+    """Removes the link between the doctor and patient, revoking all access."""
+    link = db.query(models.PersonalDoctor).filter(
+        models.PersonalDoctor.doctor_id == current_doctor.id,
+        models.PersonalDoctor.user_id == user_id
+    ).first()
+
+    if not link:
+        raise HTTPException(status_code=404, detail="Patient not found in your care team")
+
+    # Delete the connection
+    db.delete(link)
+    
+    # Optional clean-up: Automatically cancel any "Pending" requests between them just in case
+    db.query(models.CareTeamRequest).filter(
+        models.CareTeamRequest.doctor_id == current_doctor.id,
+        models.CareTeamRequest.user_id == user_id,
+        models.CareTeamRequest.status == "Pending"
+    ).delete()
+    
+    db.commit()
+    
+    return {"message": "Patient removed successfully"}
+
+# ==========================================
+# 17. WITHDRAW PENDING REQUEST
+# ==========================================
+@doctor_data_router.delete("/pending-requests/{request_id}")
+def withdraw_pending_request(
+    request_id: int,
+    db: Session = Depends(get_db),
+    current_doctor: models.Doctor = Depends(get_current_doctor)
+):
+    """Allows a doctor to cancel a care team request before the patient accepts it."""
+    req = db.query(models.CareTeamRequest).filter(
+        models.CareTeamRequest.id == request_id,
+        models.CareTeamRequest.doctor_id == current_doctor.id,
+        models.CareTeamRequest.status == "Pending"
+    ).first()
+
+    if not req:
+        raise HTTPException(status_code=404, detail="Pending request not found")
+
+    db.delete(req)
+    db.commit()
+    return {"message": "Request withdrawn successfully"}

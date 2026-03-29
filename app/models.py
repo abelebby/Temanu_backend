@@ -213,3 +213,22 @@ class PersonalDoctor(Base):
 
     doctor = relationship("Doctor", back_populates="patients")
     user = relationship("User", back_populates="personal_doctors")
+
+# ==========================================
+# CARE TEAM REQUESTS TABLE
+# ==========================================
+class CareTeamRequest(Base):
+    __tablename__ = "care_team_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    doctor_id = Column(String(50), ForeignKey("doctors.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    
+    # Status can be: "Pending", "Accepted", or "Declined"
+    status = Column(String(50), default="Pending") 
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Optional: If you want to use relationships to fetch names easily
+    doctor = relationship("Doctor")
+    user = relationship("User")

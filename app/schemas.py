@@ -80,9 +80,7 @@ class HealthMetricOut(BaseModel):
     class Config:
         from_attributes = True
 
-
 #password resets~
-
 
 class RequestOTP(BaseModel):
     email: EmailStr
@@ -155,6 +153,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     history: list[ChatMessage] = []
+    image: Optional[str] = None
 
 # --- DOCTOR SCHEMAS ---
 class DoctorOut(BaseModel):

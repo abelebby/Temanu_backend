@@ -9,6 +9,7 @@ import boto3
 from botocore.client import Config
 import os
 import uuid
+from pydantic import BaseModel
 
 router = APIRouter(
     prefix="/care-team",
@@ -24,6 +25,22 @@ s3_client = boto3.client(
     config=Config(signature_version='s3v4')
 )
 BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
+
+# ==========================================
+# PYDANTIC SCHEMAS FOR REQUESTS
+# ==========================================
+class PermissionsMap(BaseModel):
+    can_view_heart_rate: bool
+    can_view_blood_pressure: bool
+    can_view_blood_glucose: bool
+    can_view_oxygen_saturation: bool
+    can_view_body_weight: bool
+    can_view_medications: bool
+    can_view_activity: bool
+
+# Flutter sends: {"permissions": {"can_view_heart_rate": true, ...}}
+class ApproveRequestPayload(BaseModel):
+    permissions: PermissionsMap
 
 # ==========================================
 # 1. GET LINKED DOCTORS (My Doctors Page)
@@ -334,3 +351,96 @@ def get_download_url(
         return {"download_url": presigned_url}
     except Exception as e:
         raise HTTPException(status_code=500, detail="Could not generate download URL")
+    
+# ==========================================
+# 13. GET PENDING REQUESTS (For Patients)
+# ==========================================
+@router.get("/requests")
+def get_patient_pending_requests(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """Gets all care team requests sent to this patient by doctors."""
+    requests = db.query(models.CareTeamRequest).filter(
+        models.CareTeamRequest.user_id == current_user.id,
+        models.CareTeamRequest.status == "Pending"
+    ).all()
+
+    results = []
+    for req in requests:
+        doctor = db.query(models.Doctor).filter(models.Doctor.id == req.doctor_id).first()
+        if doctor:
+            results.append({
+                "id": req.id,
+                "doctor_id": doctor.id,
+                "doctor_name": doctor.preferred_name or doctor.name,
+                "doctor_specialisation": doctor.specialisation,
+                "doctor_clinic": doctor.clinic_name,
+                "doctor_profile_image_url": doctor.profile_image_url
+            })
+    return results
+
+# ==========================================
+# 14. APPROVE REQUEST (For Patients)
+# ==========================================
+@router.post("/requests/{request_id}/approve")
+def approve_care_team_request(
+    request_id: int,
+    payload: ApproveRequestPayload,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """Approves a request and creates the official PersonalDoctor link."""
+    req = db.query(models.CareTeamRequest).filter(
+        models.CareTeamRequest.id == request_id,
+        models.CareTeamRequest.user_id == current_user.id,
+        models.CareTeamRequest.status == "Pending"
+    ).first()
+
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+
+    perms = payload.permissions
+
+    # 1. Create the official care team link with the patient's chosen permissions
+    new_link = models.PersonalDoctor(
+        user_id=current_user.id,
+        doctor_id=req.doctor_id,
+        can_view_heart_rate=perms.can_view_heart_rate,
+        can_view_blood_pressure=perms.can_view_blood_pressure,
+        can_view_blood_glucose=perms.can_view_blood_glucose,
+        can_view_oxygen_saturation=perms.can_view_oxygen_saturation,
+        can_view_body_weight=perms.can_view_body_weight,
+        can_view_medications=perms.can_view_medications,
+        can_view_activity=perms.can_view_activity
+    )
+    db.add(new_link)
+    
+    # 2. Delete the pending request since it is now active
+    db.delete(req)
+    db.commit()
+    
+    return {"message": "Doctor successfully added to care team"}
+
+# ==========================================
+# 15. DECLINE REQUEST (For Patients)
+# ==========================================
+@router.post("/requests/{request_id}/decline")
+def decline_care_team_request(
+    request_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """Rejects and deletes a care team request."""
+    req = db.query(models.CareTeamRequest).filter(
+        models.CareTeamRequest.id == request_id,
+        models.CareTeamRequest.user_id == current_user.id,
+        models.CareTeamRequest.status == "Pending"
+    ).first()
+
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+
+    db.delete(req)
+    db.commit()
+    return {"message": "Request declined"}
