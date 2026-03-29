@@ -222,7 +222,9 @@ def update_user_profile(
     if update_data.preferred_name: db_user.preferred_name = update_data.preferred_name
     if update_data.gender: db_user.gender = update_data.gender
     if update_data.dob: db_user.dob = update_data.dob
+    if update_data.height: db_user.height = update_data.height
     if update_data.blood_type: db_user.blood_type = update_data.blood_type
+    if update_data.conditions is not None: db_user.conditions = update_data.conditions
 
     # 3. Commit and refresh safely!
     db.commit()

@@ -26,6 +26,11 @@ class UserOut(BaseModel):
     name: str
     preferred_name: str
     username: str
+    height: float
+    conditions: Optional[str] = None
+    gender: Optional[str] = None
+    dob: Optional[str] = None
+    blood_type: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -35,6 +40,8 @@ class UserUpdate(BaseModel):
     gender: Optional[str] = None
     dob: Optional[str] = None
     blood_type: Optional[str] = None
+    height: Optional[float] = None
+    conditions: Optional[str] = None
 
 class VerifyRegistrationOTP(BaseModel):
     email: EmailStr

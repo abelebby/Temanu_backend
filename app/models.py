@@ -17,6 +17,8 @@ class User(Base):
     gender = Column(String(20), nullable=True)
     dob = Column(String(50), nullable=True) 
     blood_type = Column(String(10), nullable=True)
+    height = Column(String, nullable=True)
+    conditions = Column(String, nullable=True, default="")
     
     created_at = Column(TIMESTAMP, server_default=func.now())
 
