@@ -132,6 +132,7 @@ def get_patient_metrics(
         models.PersonalDoctor.doctor_id == current_doctor.id,
         models.PersonalDoctor.user_id == user_id
     ).first()
+    
     if not link:
         raise HTTPException(status_code=403, detail="This patient is not in your care team")
 
@@ -143,20 +144,30 @@ def get_patient_metrics(
     # Format into a clean response
     result = []
     for m in metrics:
-        entry = {"timestamp": m.timestamp.isoformat() if m.timestamp else None}
-        if m.heart_rate is not None:
+        entry = {"timestamp": m.timestamp.isoformat() + "Z" if m.timestamp else None}
+        
+        # 🔒 SECURITY CHECK: Only attach the metric if the patient granted permission!
+        if link.can_view_heart_rate and m.heart_rate is not None:
             entry["heart_rate"] = m.heart_rate
-        if m.blood_pressure_systolic is not None:
-            entry["blood_pressure_systolic"] = m.blood_pressure_systolic
-        if m.blood_pressure_diastolic is not None:
-            entry["blood_pressure_diastolic"] = m.blood_pressure_diastolic
-        if m.blood_glucose is not None:
+            
+        if link.can_view_blood_pressure:
+            if m.blood_pressure_systolic is not None:
+                entry["blood_pressure_systolic"] = m.blood_pressure_systolic
+            if m.blood_pressure_diastolic is not None:
+                entry["blood_pressure_diastolic"] = m.blood_pressure_diastolic
+                
+        if link.can_view_blood_glucose and m.blood_glucose is not None:
             entry["blood_glucose"] = m.blood_glucose
-        if m.oxygen_saturation is not None:
+            
+        if link.can_view_oxygen_saturation and m.oxygen_saturation is not None:
             entry["oxygen_saturation"] = m.oxygen_saturation
-        if m.body_weight is not None:
+            
+        if link.can_view_body_weight and m.body_weight is not None:
             entry["body_weight"] = m.body_weight
-        result.append(entry)
+            
+        # Only append the entry if it contains more than just the timestamp
+        if len(entry) > 1:
+            result.append(entry)
 
     return result
 
@@ -176,8 +187,13 @@ def get_patient_medications(
         models.PersonalDoctor.doctor_id == current_doctor.id,
         models.PersonalDoctor.user_id == user_id
     ).first()
+    
     if not link:
         raise HTTPException(status_code=403, detail="This patient is not in your care team")
+
+    # 🔒 SECURITY CHECK: Does the doctor have permission to view medications?
+    if not link.can_view_medications:
+        return [] # Return an empty list so the doctor just sees "No medications recorded"
 
     today = date.today()
     meds = db.query(models.Medication).filter(
@@ -205,6 +221,68 @@ def get_patient_medications(
 
     return results
 
+# ==========================================
+# 6.5 GET PATIENT'S ACTIVITY / STEPS
+# ==========================================
+@doctor_data_router.get("/patients/{user_id}/activity")
+def get_patient_activity(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_doctor: models.Doctor = Depends(get_current_doctor)
+):
+    # 1. Verify link & permissions
+    link = db.query(models.PersonalDoctor).filter(
+        models.PersonalDoctor.doctor_id == current_doctor.id,
+        models.PersonalDoctor.user_id == user_id
+    ).first()
+    
+    if not link or not link.can_view_activity:
+        return [] 
+
+    # 2. Fetch the most recent cache payloads for this user
+    # We grab the last few requests the patient app made to Fitbit
+    cached_rows = db.query(models.FitbitCache).filter(
+        models.FitbitCache.user_id == user_id
+    ).order_by(models.FitbitCache.updated_at.desc()).limit(10).all()
+
+    # We use a dictionary to automatically prevent duplicate dates.
+    # Because we ordered by `updated_at.desc()`, the first time we see a date, it is the freshest!
+    step_dict = {}
+
+    for row in cached_rows:
+        if row.data:
+            # Check if this row contains a time-series array (e.g., from the "1w" or "1m" fetch)
+            if "activities-steps" in row.data:
+                for item in row.data["activities-steps"]:
+                    date_str = item.get("dateTime")
+                    
+                    # Fitbit returns the value as a string (e.g., "5441"), so we convert it to an integer
+                    try:
+                        val = int(float(item.get("value", 0)))
+                    except ValueError:
+                        val = 0
+                        
+                    if date_str and date_str not in step_dict:
+                        step_dict[date_str] = val
+                        
+            # Fallback: In case the cache is just a single day's summary
+            elif "summary" in row.data and "steps" in row.data["summary"]:
+                if row.date and row.date not in step_dict:
+                    step_dict[row.date] = row.data["summary"]["steps"]
+
+    # 3. Sort the dates chronologically to find the most recent 14 days
+    sorted_dates = sorted(step_dict.keys(), reverse=True)
+    top_14_dates = sorted_dates[:14]
+
+    # 4. Format them for Flutter
+    results = []
+    for d in top_14_dates:
+        results.append({
+            "date": d,
+            "steps": step_dict[d]
+        })
+
+    return results
 
 # ==========================================
 # 7. GET ALL DOCTOR'S APPOINTMENTS
