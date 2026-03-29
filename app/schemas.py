@@ -168,6 +168,12 @@ class ChatRequest(BaseModel):
     history: list[ChatMessage] = []
     image: Optional[str] = None
 
+class AITipRequest(BaseModel):
+    prompt: str
+
+class MealAnalysisRequest(BaseModel):
+    image_base64: str
+
 # --- DOCTOR SCHEMAS ---
 class DoctorOut(BaseModel):
     id: str

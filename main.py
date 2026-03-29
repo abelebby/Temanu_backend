@@ -22,6 +22,7 @@ import copy
 from app import doctors
 from app.doctor_portal import doctor_auth_router, doctor_data_router
 from app.database import SessionLocal, engine, get_db
+import json
 
 # Assuming your database session generator is called SessionLocal
 from app.database import SessionLocal
@@ -959,6 +960,79 @@ def check_medications_and_notify():
     finally:
         db.close() # Always close background DB sessions safely
 
+@app.post("/generate-tip")
+def generate_ai_tip(
+    request: schemas.AITipRequest, 
+    current_user: models.User = Depends(get_current_user)
+):
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                # We move the system instructions here for better security!
+                {"role": "system", "content": "You are a concise health AI assistant. Keep your answers under 120 characters. Do not use asterisks or markdown formatting."},
+                {"role": "user", "content": request.prompt}
+            ],
+            temperature=0.4,
+            max_tokens=60 # Keep it cheap and short!
+        )
+        
+        reply = response.choices[0].message.content.strip()
+        return {"tip": reply}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.post("/analyze-meal")
+def analyze_meal(
+    request: schemas.MealAnalysisRequest, 
+    current_user: models.User = Depends(get_current_user)
+):
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    
+    # --- THE CHAIN OF THOUGHT PROMPT ---
+    prompt = '''Analyze this meal photo. Before giving the final macros, you MUST think step-by-step:
+    1. List every visible ingredient.
+    2. Estimate the volume/weight of each ingredient in grams or cups.
+    3. Estimate the calories, protein, carbs, and fats for each individual ingredient.
+    4. Sum the total macros.
+
+    Respond ONLY with a valid JSON object (no markdown, no extra text) in this exact format:
+    {
+      "meal_name": "short descriptive name of the meal",
+      "reasoning": "your step-by-step breakdown and math",
+      "calories": <total integer>,
+      "protein_g": <total integer>,
+      "carbs_g": <total integer>,
+      "fats_g": <total integer>
+    }
+    If you cannot identify a meal, use 0 for all values and "Unknown Meal" as the name.'''
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{request.image_base64}"}}
+                    ]
+                }
+            ],
+            max_tokens=800, # Increased so the AI has room to write out its math!
+            temperature=0.2
+        )
+        
+        raw_reply = response.choices[0].message.content.strip()
+        # Clean up any potential markdown formatting the AI tries to sneak in
+        clean_reply = raw_reply.replace("```json", "").replace("```", "").strip()
+        
+        return json.loads(clean_reply)
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/chat")
 def chat(
