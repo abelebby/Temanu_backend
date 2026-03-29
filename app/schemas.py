@@ -271,6 +271,7 @@ class DoctorPatientOut(BaseModel):
     gender: Optional[str] = None
     dob: Optional[str] = None
     blood_type: Optional[str] = None
+    conditions: Optional[str] = None
 
     class Config:
         from_attributes = True
