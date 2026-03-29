@@ -31,6 +31,9 @@ class UserOut(BaseModel):
     gender: Optional[str] = None
     dob: Optional[str] = None
     blood_type: Optional[str] = None
+    body_goal: Optional[str] = None
+    activity_level: Optional[str] = None
+    goal_offset: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -42,6 +45,9 @@ class UserUpdate(BaseModel):
     blood_type: Optional[str] = None
     height: Optional[float] = None
     conditions: Optional[str] = None
+    body_goal: Optional[str] = None
+    activity_level: Optional[str] = None
+    goal_offset: Optional[int] = None
 
 class VerifyRegistrationOTP(BaseModel):
     email: EmailStr
@@ -289,3 +295,15 @@ class DoctorPortalAppointmentCreate(BaseModel):
     user_id: int            
     appointment_time: datetime
     purpose: str
+
+class GoalCreate(BaseModel):
+    goal_type: str
+    target_value: float
+
+class GoalOut(BaseModel):
+    id: int
+    goal_type: str
+    target_value: float
+
+    class Config:
+        from_attributes = True

@@ -19,6 +19,9 @@ class User(Base):
     blood_type = Column(String(10), nullable=True)
     height = Column(String, nullable=True)
     conditions = Column(String, nullable=True, default="")
+    body_goal = Column(String, nullable=True, default="maintain")
+    activity_level = Column(String, nullable=True, default="sedentary")
+    goal_offset = Column(Integer, nullable=True, default=500)
     
     created_at = Column(TIMESTAMP, server_default=func.now())
 
@@ -234,3 +237,10 @@ class CareTeamRequest(Base):
     # Optional: If you want to use relationships to fetch names easily
     doctor = relationship("Doctor")
     user = relationship("User")
+
+class UserGoal(Base):
+    __tablename__ = "user_goals"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    goal_type = Column(String, index=True)  # e.g., "body_weight", "daily_steps"
+    target_value = Column(Float)

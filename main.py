@@ -225,6 +225,9 @@ def update_user_profile(
     if update_data.height: db_user.height = update_data.height
     if update_data.blood_type: db_user.blood_type = update_data.blood_type
     if update_data.conditions is not None: db_user.conditions = update_data.conditions
+    if update_data.body_goal is not None: db_user.body_goal = update_data.body_goal
+    if update_data.activity_level is not None: db_user.activity_level = update_data.activity_level
+    if update_data.goal_offset is not None: db_user.goal_offset = update_data.goal_offset
 
     # 3. Commit and refresh safely!
     db.commit()
@@ -1110,3 +1113,41 @@ STRICT RULES YOU MUST FOLLOW:
     reply = response.choices[0].message.content
 
     return {"reply": reply}
+
+# ==========================================
+# GOALS APIS
+# ==========================================
+@app.post("/goals", response_model=schemas.GoalOut)
+def upsert_goal(
+    goal: schemas.GoalCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    # Check if this specific goal already exists for the user
+    existing_goal = db.query(models.UserGoal).filter(
+        models.UserGoal.user_id == current_user.id,
+        models.UserGoal.goal_type == goal.goal_type
+    ).first()
+
+    if existing_goal:
+        existing_goal.target_value = goal.target_value
+        db.commit()
+        db.refresh(existing_goal)
+        return existing_goal
+    else:
+        new_goal = models.UserGoal(
+            user_id=current_user.id,
+            goal_type=goal.goal_type,
+            target_value=goal.target_value
+        )
+        db.add(new_goal)
+        db.commit()
+        db.refresh(new_goal)
+        return new_goal
+
+@app.get("/goals", response_model=list[schemas.GoalOut])
+def get_goals(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    return db.query(models.UserGoal).filter(models.UserGoal.user_id == current_user.id).all()
