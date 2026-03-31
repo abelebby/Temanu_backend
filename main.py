@@ -19,7 +19,7 @@ from email.message import EmailMessage
 import re 
 from openai import OpenAI
 import copy
-from app import doctors
+from app import doctors, fitbit
 from app.doctor_portal import doctor_auth_router, doctor_data_router
 from app.database import SessionLocal, engine, get_db
 import json
@@ -47,6 +47,7 @@ mail_config = ConnectionConfig(
 app.include_router(doctors.router)
 app.include_router(doctor_auth_router)
 app.include_router(doctor_data_router)
+app.include_router(fitbit.router)
 
 @app.on_event("startup")
 def start_scheduler():
@@ -1225,3 +1226,4 @@ def get_goals(
     current_user: models.User = Depends(get_current_user)
 ):
     return db.query(models.UserGoal).filter(models.UserGoal.user_id == current_user.id).all()
+
