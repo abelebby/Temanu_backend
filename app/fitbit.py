@@ -77,6 +77,6 @@ def fitbit_callback(code: str, state: str, db: Session = Depends(get_db)):
     db_token.fitbit_user_id = token_data["user_id"]
     db.commit()
 
-    frontend_return_url = "https://temanu.vercel.app" 
+    frontend_return_url = "https://temanu.vercel.app"
     
     return RedirectResponse(url=frontend_return_url)

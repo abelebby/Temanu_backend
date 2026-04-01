@@ -284,7 +284,7 @@ def link_fitbit_account(
 @app.get("/fitbit/activity/{date}")
 def get_fitbit_activity(
     date: str, 
-    force_refresh: bool = False, # <-- NEW
+    force_refresh: bool = False, 
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
@@ -298,7 +298,7 @@ def get_fitbit_activity(
 @app.get("/fitbit/steps/intraday/{date}")
 def get_fitbit_intraday_steps(
     date: str,
-    force_refresh: bool = False, # <-- NEW
+    force_refresh: bool = False, 
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
@@ -429,15 +429,11 @@ def fetch_and_cache_fitbit(db: Session, current_user: models.User, endpoint: str
         models.FitbitCache.date == date_str
     ).first()
 
-    # 2. THE SHIELD LOGIC
-    if cache:
-        # A. If it's a past date, ALWAYS use the cache. Fitbit past data doesn't change.
-        if date_str != today_str:
-            return cache.data
-            
-        # B. If it's today, but the app DID NOT ask for a refresh, use the cache!
-        if date_str == today_str and not force_refresh:
-            return cache.data
+    # 2. THE SHIELD LOGIC (UPDATED)
+    # If there is a cache AND the user didn't ask for a force refresh, use the cache.
+    # This now allows force_refresh to work on past dates so we can clear bad data!
+    if cache and not force_refresh:
+        return cache.data
 
     # 3. If it gets here, we MUST hit the API (Either missing data, or force_refresh is True)
     fitbit_data = db.query(models.FitbitToken).filter(models.FitbitToken.user_id == current_user.id).first()
@@ -452,6 +448,7 @@ def fetch_and_cache_fitbit(db: Session, current_user: models.User, endpoint: str
     if response.status_code == 200:
         data = response.json()
 
+        # Update existing cache row with the correct data
         if cache:
             cache.data = data
             cache.updated_at = datetime.utcnow()
