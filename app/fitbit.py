@@ -31,6 +31,7 @@ def connect_to_fitbit(current_user: models.User = Depends(get_current_user)):
         f"&redirect_uri={REDIRECT_URI}"
         f"&scope={scopes}"
         f"&state={state}" 
+        f"&prompt=login consent"
     )
     
     return {"auth_url": url}
