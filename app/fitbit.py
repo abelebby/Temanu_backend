@@ -2,7 +2,7 @@ import os
 import base64
 import requests
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, HTMLResponse
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app import models
@@ -78,6 +78,40 @@ def fitbit_callback(code: str, state: str, db: Session = Depends(get_db)):
     db_token.fitbit_user_id = token_data["user_id"]
     db.commit()
 
-    frontend_return_url = "https://temanu.vercel.app"
+    html_content = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Authentication complete</title>
+    </head>
+    <body>
+      <p style="font-family: sans-serif; text-align: center; margin-top: 50px;">
+        Authentication successful! Connecting to TemanU...
+      </p>
+      <script>
+        window.onload = function() {
+          const message = {
+            'flutter-web-auth-2': window.location.href
+          };
+          try {
+            if (window.opener) {
+              // Talk to the main Flutter window
+              window.opener.postMessage(message, window.location.origin);
+              // Close this popup
+              window.close();
+            } else {
+              // Fallback for strict browsers
+              localStorage.setItem('flutter-web-auth-2', window.location.href);
+              window.close();
+            }
+          } catch (e) {
+            console.error("Failed to close window:", e);
+            document.body.innerHTML += "<br><br>You can safely close this window now.";
+          }
+        };
+      </script>
+    </body>
+    </html>
+    """
     
-    return RedirectResponse(url=frontend_return_url)
+    return HTMLResponse(content=html_content)
