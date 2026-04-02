@@ -37,10 +37,10 @@ mail_config = ConnectionConfig(
     MAIL_USERNAME=os.getenv("MAIL_EMAIL"),
     MAIL_PASSWORD=os.getenv("MAIL_PASSWORD"),
     MAIL_FROM=os.getenv("MAIL_EMAIL"),
-    MAIL_SERVER="smtp.sendgrid.net",
-    MAIL_PORT=465,
-    MAIL_STARTTLS=False,
-    MAIL_SSL_TLS=True,
+    MAIL_PORT=587,
+    MAIL_SERVER="smtp.gmail.com",
+    MAIL_STARTTLS=True,
+    MAIL_SSL_TLS=False,
     USE_CREDENTIALS=True
 )
 
@@ -59,11 +59,7 @@ def start_scheduler():
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost",
-        "http://localhost:8080", # Or whatever your local Flutter port is
-        "https://temanu.vercel.app" 
-    ],
+    allow_origins=["*"],  # Flutter mobile is not browser-based, CORS applies to web only
     allow_credentials=True,
     allow_methods=["*"],  # Allows POST, GET, OPTIONS, etc.
     allow_headers=["*"],  # Allows all headers (like your Authorization JWT)
