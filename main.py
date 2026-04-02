@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app import models, schemas
 from app.database import SessionLocal, engine
 from app.auth import hash_password, verify_password, create_access_token, get_current_user
-from fastapi_mail import FastMail, MessageSchema, ConnectionConfig
+import httpx
 import os
 from dotenv import load_dotenv
 import random
@@ -14,8 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import requests
 from fastapi import Header
 from apscheduler.schedulers.background import BackgroundScheduler
-import smtplib
-from email.message import EmailMessage
+
 import re 
 from openai import OpenAI
 import copy
@@ -33,16 +32,32 @@ models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
-mail_config = ConnectionConfig(
-    MAIL_USERNAME=os.getenv("MAIL_EMAIL"),
-    MAIL_PASSWORD=os.getenv("MAIL_PASSWORD"),
-    MAIL_FROM=os.getenv("MAIL_EMAIL"),
-    MAIL_PORT=587,
-    MAIL_SERVER="smtp.gmail.com",
-    MAIL_STARTTLS=True,
-    MAIL_SSL_TLS=False,
-    USE_CREDENTIALS=True
-)
+RESEND_API_KEY = os.getenv("RESEND_API_KEY")
+MAIL_FROM = os.getenv("MAIL_FROM", "TemanU <noreply@temanu.com>")
+
+def send_email(to_email: str, subject: str, body: str):
+    """Send email via Resend HTTP API (works on Railway — no SMTP needed)."""
+    try:
+        response = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "from": MAIL_FROM,
+                "to": [to_email],
+                "subject": subject,
+                "text": body
+            },
+            timeout=10
+        )
+        if response.status_code not in (200, 201):
+            print(f"[EMAIL ERROR] Resend API returned {response.status_code}: {response.text}")
+        else:
+            print(f"[EMAIL OK] Sent '{subject}' to {to_email}")
+    except Exception as e:
+        print(f"[EMAIL ERROR] Failed to send email: {e}")
 
 app.include_router(doctors.router)
 app.include_router(doctor_auth_router)
@@ -112,14 +127,11 @@ async def request_registration_otp(request: schemas.RequestOTP, db: Session = De
     db.commit()
 
     # 7. Send the email
-    message = MessageSchema(
+    send_email(
+        to_email=request.email,
         subject="TemanU Registration Verification",
-        recipients=[request.email],
-        body=f"Welcome to TemanU!\n\nYour registration verification code is: {code}\n\nThis code expires in 15 minutes.",
-        subtype="plain"
+        body=f"Welcome to TemanU!\n\nYour registration verification code is: {code}\n\nThis code expires in 15 minutes."
     )
-    fm = FastMail(mail_config)
-    await fm.send_message(message)
 
     return {"message": "Verification OTP sent to your email"}
 
@@ -543,14 +555,11 @@ async def forgot_password(request: schemas.RequestOTP, db: Session = Depends(get
     db.commit()
 
     # Send email
-    message = MessageSchema(
+    send_email(
+        to_email=user.email,
         subject="TemanU Password Reset OTP",
-        recipients=[user.email],
-        body=f"Hi {user.preferred_name},\n\nYour password reset code is: {code}\n\nThis code expires in 15 minutes.\n\nIf you did not request this, ignore this email.",
-        subtype="plain"
+        body=f"Hi {user.preferred_name},\n\nYour password reset code is: {code}\n\nThis code expires in 15 minutes.\n\nIf you did not request this, ignore this email."
     )
-    fm = FastMail(mail_config)
-    await fm.send_message(message)
 
     return {"message": "If that email exists, an OTP has been sent"}
 
@@ -602,14 +611,11 @@ async def request_change_password_otp(
     db.commit()
 
     # Send email
-    message = MessageSchema(
+    send_email(
+        to_email=current_user.email,
         subject="TemanU Password Change OTP",
-        recipients=[current_user.email],
-        body=f"Hi {current_user.preferred_name},\n\nYour password change code is: {code}\n\nThis code expires in 15 minutes.\n\nIf you did not request this, please secure your account immediately.",
-        subtype="plain"
+        body=f"Hi {current_user.preferred_name},\n\nYour password change code is: {code}\n\nThis code expires in 15 minutes.\n\nIf you did not request this, please secure your account immediately."
     )
-    fm = FastMail(mail_config)
-    await fm.send_message(message)
 
     return {"message": "OTP sent to your registered email"}
 
@@ -905,30 +911,17 @@ def edit_medication(
 # MEDICATION EMAIL SCHEDULER
 # ==========================================
 
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 465 
-SENDER_EMAIL = os.getenv("MAIL_EMAIL")
-SENDER_PASSWORD = os.getenv("MAIL_PASSWORD")
-
 def send_medication_email(to_email, user_name, med_name, dosage, unit):
-    msg = EmailMessage()
-    msg.set_content(
-        f"Hi {user_name},\n\n"
-        f"It is time to take your medication: {dosage} {unit} of {med_name}.\n\n"
-        f"Don't forget to log it in your Temanu dashboard once taken!\n\n"
-        f"Stay healthy,\nThe Temanu Team"
+    send_email(
+        to_email=to_email,
+        subject=f"Medication Reminder: Time to take your {med_name}",
+        body=(
+            f"Hi {user_name},\n\n"
+            f"It is time to take your medication: {dosage} {unit} of {med_name}.\n\n"
+            f"Don't forget to log it in your TemanU dashboard once taken!\n\n"
+            f"Stay healthy,\nThe TemanU Team"
+        )
     )
-    msg['Subject'] = f"💊 Reminder: Time to take your {med_name}"
-    msg['From'] = SENDER_EMAIL
-    msg['To'] = to_email
-
-    try:
-        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
-            server.login(SENDER_EMAIL, SENDER_PASSWORD)
-            server.send_message(msg)
-            print(f"Email sent successfully to {to_email} for {med_name}")
-    except Exception as e:
-        print(f"Failed to send email: {e}")
 
 def check_medications_and_notify():
     # 1. Get current time in the exact format saved in the DB (e.g., "08:00 AM")
