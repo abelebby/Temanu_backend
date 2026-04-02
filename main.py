@@ -37,7 +37,7 @@ mail_config = ConnectionConfig(
     MAIL_USERNAME=os.getenv("MAIL_EMAIL"),
     MAIL_PASSWORD=os.getenv("MAIL_PASSWORD"),
     MAIL_FROM=os.getenv("MAIL_EMAIL"),
-    MAIL_SERVER="smtp.gmail.com",
+    MAIL_SERVER="smtp.sendgrid.net",
     MAIL_PORT=465,
     MAIL_STARTTLS=False,
     MAIL_SSL_TLS=True,
@@ -59,7 +59,11 @@ def start_scheduler():
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows any web port to connect during local testing
+    allow_origins=[
+        "http://localhost",
+        "http://localhost:8000", # Or whatever your local Flutter port is
+        "https://temanu.vercel.app" 
+    ],
     allow_credentials=True,
     allow_methods=["*"],  # Allows POST, GET, OPTIONS, etc.
     allow_headers=["*"],  # Allows all headers (like your Authorization JWT)
