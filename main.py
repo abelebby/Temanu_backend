@@ -61,7 +61,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost",
-        "http://localhost:8000", # Or whatever your local Flutter port is
+        "http://localhost:8080", # Or whatever your local Flutter port is
         "https://temanu.vercel.app" 
     ],
     allow_credentials=True,
