@@ -5,7 +5,8 @@ from sqlalchemy.orm import Session
 from app import models, schemas
 from app.database import SessionLocal, engine
 from app.auth import hash_password, verify_password, create_access_token, get_current_user
-import httpx
+import smtplib
+from email.message import EmailMessage
 import os
 from dotenv import load_dotenv
 import random
@@ -32,32 +33,28 @@ models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
-RESEND_API_KEY = os.getenv("RESEND_API_KEY")
-MAIL_FROM = os.getenv("MAIL_FROM", "TemanU <noreply@temanu.com>")
+SMTP_EMAIL = os.getenv("MAIL_EMAIL")
+SMTP_PASSWORD = os.getenv("MAIL_PASSWORD")
 
 def send_email(to_email: str, subject: str, body: str):
-    """Send email via Resend HTTP API (works on Railway — no SMTP needed)."""
+    """Send email via Gmail SMTP. Non-fatal — logs a warning if unreachable (e.g. on Railway)."""
     try:
-        response = requests.post(
-            "https://api.resend.com/emails",
-            headers={
-                "Authorization": f"Bearer {RESEND_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "from": MAIL_FROM,
-                "to": [to_email],
-                "subject": subject,
-                "text": body
-            },
-            timeout=10
-        )
-        if response.status_code not in (200, 201):
-            print(f"[EMAIL ERROR] Resend API returned {response.status_code}: {response.text}")
-        else:
-            print(f"[EMAIL OK] Sent '{subject}' to {to_email}")
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = f"TemanU <{SMTP_EMAIL}>"
+        msg["To"] = to_email
+        msg.set_content(body)
+
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(SMTP_EMAIL, SMTP_PASSWORD)
+            server.send_message(msg)
+
+        print(f"[EMAIL OK] Sent '{subject}' to {to_email}")
     except Exception as e:
-        print(f"[EMAIL ERROR] Failed to send email: {e}")
+        # Non-fatal: log and continue. Emails may not work in all environments (e.g. Railway).
+        print(f"[EMAIL WARNING] Could not send email to {to_email}: {e}")
 
 app.include_router(doctors.router)
 app.include_router(doctor_auth_router)
