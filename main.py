@@ -536,7 +536,7 @@ async def forgot_password(request: schemas.RequestOTP, db: Session = Depends(get
 
     # Generate 6 digit OTP
     code = str(random.randint(100000, 999999))
-    expires_at = datetime.datetime.utcnow() + datetime.timedelta(minutes=15)
+    expires_at = datetime.utcnow() + timedelta(minutes=15)
 
     # Delete any existing OTP for this email
     db.query(models.OTPCode).filter(models.OTPCode.email == request.email).delete()
