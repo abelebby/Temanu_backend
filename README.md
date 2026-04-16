@@ -56,19 +56,3 @@ uvicorn main:app --reload
 API runs at `http://localhost:8000`. Docs at `http://localhost:8000/docs`.
 
 ---
-
-## Current API Endpoints
-
-| Method | Endpoint | Description | Auth Required |
-|--------|----------|-------------|---------------|
-| POST | `/register` | Register a new user | No |
-| POST | `/login` | Login, returns JWT token | No |
-| GET | `/me` | Get current user info | Yes |
-
----
-
-## Notes
-
-- Never commit your `.env` file
-- Generate your own `SECRET_KEY` locally
-- Database is currently local — each person runs their own MySQL instance using `schema.sql`
