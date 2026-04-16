@@ -2,18 +2,7 @@
 
 ## Current Status
 
-Authentication is fully set up and working. The backend is built with FastAPI and MySQL.
-
-### What's done:
-- User registration — accepts name, email, username, preferred name and password. Password is hashed before being stored.
-- User login — verifies email and password, returns a JWT token
-- Protected routes — any route using `Depends(get_current_user)` requires a valid JWT token in the request header
-
-### What's not done yet:
-- Health metrics endpoints (blood glucose, heart rate, oxygen saturation, blood pressure, calories, body weight)
-- Activity tracking endpoints (daily steps)
-- Medications endpoints (add/view medications)
-- Medication logs endpoints (track whether medications were taken)
+COMPLETED
 
 ---
 
